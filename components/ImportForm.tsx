@@ -7,8 +7,9 @@ import { mergeExport } from "@/lib/letterboxd";
 import { unzipText } from "@/lib/unzip";
 
 const BATCH = 20;
-// Only the top-level files; the zip also has deleted/, likes/, lists/ folders.
-const WANTED = /^(watched|ratings|watchlist)\.csv$/i;
+// Only these; the zip also has deleted/, orphaned/, lists/ and the other
+// likes/ files, none of which are films you've seen.
+const WANTED = /^((watched|ratings|watchlist)\.csv|likes\/films\.csv)$/i;
 
 export function ImportForm({ name }: { name: string }) {
   const router = useRouter();

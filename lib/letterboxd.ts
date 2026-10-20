@@ -2,7 +2,8 @@
 //
 // Letterboxd → Settings → Import & Export → Export your data gives a zip. The
 // files that matter: watched.csv (everything logged), ratings.csv (the ones
-// with stars) and watchlist.csv. All three share Name, Year, Letterboxd URI.
+// with stars), watchlist.csv and likes/films.csv (the hearts). All share Name,
+// Year, Letterboxd URI.
 import { parseCsv } from "./csv";
 
 export type LbFilm = {
@@ -12,12 +13,17 @@ export type LbFilm = {
   rating: number | null; // 0.5–5
   watched: boolean;
   watchlist: boolean;
+  hearted: boolean; // ♥ on Letterboxd
 };
 
-export type LbFileKind = "watched" | "ratings" | "watchlist" | "diary" | "unknown";
+export type LbFileKind = "watched" | "ratings" | "watchlist" | "diary" | "likes" | "unknown";
 
 export function kindOf(fileName: string, rows: Record<string, string>[]): LbFileKind {
   const f = fileName.toLowerCase();
+  // Hearts are likes/films.csv; likes/reviews.csv and likes/lists.csv are
+  // other people's reviews and lists, not films.
+  if (/(^|\/)(likes\/)?films\.csv$/.test(f)) return "likes";
+  if (f.includes("likes/")) return "unknown";
   if (f.includes("watchlist")) return "watchlist";
   if (f.includes("rating")) return "ratings";
   if (f.includes("diary")) return "diary";
@@ -42,11 +48,12 @@ export function mergeExport(files: { name: string; text: string }[]): LbFilm[] {
       // Not the URI: the same film's URI differs between files (a diary or
       // review link versus the film link).
       const key = `${name.toLowerCase()}|${year ?? ""}`;
-      const film = films.get(key) ?? { name, year, uri: r["Letterboxd URI"] ?? "", rating: null, watched: false, watchlist: false };
+      const film = films.get(key) ?? { name, year, uri: r["Letterboxd URI"] ?? "", rating: null, watched: false, watchlist: false, hearted: false };
       const rating = Number.parseFloat(r.Rating);
       if (Number.isFinite(rating) && rating > 0) film.rating = rating;
       if (kind === "watchlist") film.watchlist = true;
       else film.watched = true;
+      if (kind === "likes") film.hearted = true;
       films.set(key, film);
     }
   }
@@ -58,13 +65,18 @@ export function mergeExport(files: { name: string; text: string }[]): LbFilm[] {
 }
 
 // Stars → swipe. 4.5–5 is a super like, 3–4 a like, 2.5 and below a dislike.
-// Watched with no stars is "seen": counts as watched, weak signal.
-export function verdictFor(rating: number | null): "superlike" | "like" | "dislike" | "seen" {
+// Watched with no stars is "seen": counts as watched, weak signal. A heart on
+// anything not rated low is a favourite, so a super like (3½★ ♥ means "rated
+// fairly, but I love it").
+export function verdictFor(rating: number | null, hearted = false): "superlike" | "like" | "dislike" | "seen" {
+  if (hearted && (rating === null || rating >= 3)) return "superlike";
   if (rating === null) return "seen";
   if (rating >= 4.5) return "superlike";
   if (rating >= 3) return "like";
   return "dislike";
 }
 
-// Five stars should start above four-and-a-half in the "this or that" ranking.
-export const eloFor = (rating: number | null) => (rating && rating >= 4.5 ? 1000 + (rating - 4.5) * 200 : 1000);
+// Starting place in the "this or that" ranking: five stars above four and a
+// half, and a heart nudges a film up within its star level.
+export const eloFor = (rating: number | null, hearted = false) =>
+  (rating && rating >= 4.5 ? 1000 + (rating - 4.5) * 200 : 1000) + (hearted ? 50 : 0);

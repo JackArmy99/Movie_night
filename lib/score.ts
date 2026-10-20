@@ -110,8 +110,11 @@ export type Filters = {
   servicesOnly?: boolean;
 };
 
+const isoToday = () => new Date().toISOString().slice(0, 10);
+
 export type FilterableMovie = {
   year: number | null;
+  releaseDate?: string | null; // YYYY-MM-DD
   runtime: number | null;
   imdbRating: number | null;
   rtScore: number | null;
@@ -120,7 +123,9 @@ export type FilterableMovie = {
 };
 
 // Filters that need nothing but the list data (cheap, applied before lookups).
-export function passesCheap(m: Pick<FilterableMovie, "year">, f: Filters): boolean {
+export function passesCheap(m: Pick<FilterableMovie, "year" | "releaseDate">, f: Filters, today = isoToday()): boolean {
+  // Not out yet: can't be watched tonight. Upcoming films live in the calendar.
+  if (m.releaseDate && m.releaseDate > today) return false;
   if (f.yearFrom && (m.year ?? 0) < f.yearFrom) return false;
   if (f.yearTo && (m.year ?? 9999) > f.yearTo) return false;
   return true;

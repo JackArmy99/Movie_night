@@ -39,16 +39,21 @@ async function main() {
       { name: "ratings.csv", text: "Date,Name,Year,Letterboxd URI,Rating\n2024-01-01,Alien,1979,https://boxd.it/a,5\n2024-01-03,Cats,2019,https://boxd.it/c,1\n" },
       { name: "watchlist.csv", text: "Date,Name,Year,Letterboxd URI\n2024-01-01,Dune,2021,https://boxd.it/d\n2024-01-01,Heat,1995,https://boxd.it/b\n" },
       { name: "diary.csv", text: "Date,Name,Year,Letterboxd URI,Rating\n2024-01-01,Alien,1979,https://boxd.it/x1,3\n" },
+      { name: "likes/films.csv", text: "Date,Name,Year,Letterboxd URI\n2024-01-01,Heat,1995,https://boxd.it/b\n2024-01-01,Cats,2019,https://boxd.it/c\n" },
+      { name: "likes/reviews.csv", text: "Date,Name,Year,Letterboxd URI\n2024-01-01,Some Review,2001,https://boxd.it/r\n" },
     ]);
     const get = (n: string) => films.find((f) => f.name === n)!;
     assert.equal(films.length, 4);
     assert.equal(get("Alien").rating, 5, "diary rating must not override ratings.csv");
     assert.equal(verdictFor(get("Alien").rating), "superlike");
-    assert.equal(verdictFor(get("Heat").rating), "seen");
+    assert.equal(verdictFor(get("Heat").rating, get("Heat").hearted), "superlike", "unrated heart = favourite");
+    assert.equal(verdictFor(get("Cats").rating, get("Cats").hearted), "dislike", "a heart doesn't rescue 1 star");
+    assert.equal(verdictFor(null), "seen");
+    assert.ok(!films.some((f) => f.name === "Some Review"), "liked reviews are not films");
     assert.equal(get("Heat").watchlist, false, "watched films are not watchlist films");
     assert.equal(get("Dune").watchlist, true);
     assert.equal(get("Dune").watched, false);
-    assert.equal(verdictFor(get("Cats").rating), "dislike");
+
     assert.equal(verdictFor(3), "like");
     assert.equal(verdictFor(2.5), "dislike");
     assert.ok(eloFor(5) > eloFor(4.5));
@@ -128,6 +133,8 @@ async function main() {
     assert.ok(!passes({ ...base, runtime: 150 }, f, [8]));
     assert.ok(passes({ ...base, imdbRating: null, voteAverage: 7.2 }, { minImdb: 7 }, []), "falls back to TMDB score");
     assert.ok(!passes({ ...base, year: 1999 }, f, [8]));
+    assert.ok(!passes({ ...base, releaseDate: "2999-01-01" }, {}, []), "unreleased film suggested");
+    assert.ok(passes({ ...base, releaseDate: "2010-05-01" }, {}, []));
   });
 
   await test("Calendar feed: valid iCalendar, all-day, escaped, folded", () => {

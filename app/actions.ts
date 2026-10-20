@@ -213,7 +213,7 @@ export async function importBatch(films: LbFilm[]): Promise<ImportResult> {
         }
         await saveList([hit]);
         if (f.watched) {
-          const verdict = verdictFor(f.rating);
+          const verdict = verdictFor(f.rating, f.hearted);
           const existing = await db.swipe.findUnique({
             where: { userId_movieId: { userId: user.id, movieId: hit.id } },
           });
@@ -221,8 +221,8 @@ export async function importBatch(films: LbFilm[]): Promise<ImportResult> {
           if (!existing || existing.source !== "swipe" || existing.verdict === "unseen") {
             await db.swipe.upsert({
               where: { userId_movieId: { userId: user.id, movieId: hit.id } },
-              create: { userId: user.id, movieId: hit.id, verdict, elo: eloFor(f.rating), source: "letterboxd" },
-              update: { verdict, elo: eloFor(f.rating), source: "letterboxd" },
+              create: { userId: user.id, movieId: hit.id, verdict, elo: eloFor(f.rating, f.hearted), source: "letterboxd" },
+              update: { verdict, elo: eloFor(f.rating, f.hearted), source: "letterboxd" },
             });
           }
         } else if (f.watchlist) {
