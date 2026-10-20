@@ -2,6 +2,7 @@
 // or network. 600 made-up films across the real genre ids; "recommendations"
 // link films that share a genre, so taste signals behave like the real thing.
 import http from "node:http";
+import { gzipSync } from "node:zlib";
 
 const GENRES = [28, 12, 16, 35, 80, 99, 18, 10751, 14, 36, 27, 10402, 9648, 10749, 878, 53, 10752, 37];
 const PROVIDERS = [
@@ -67,6 +68,9 @@ export function recsFor(id: number): FakeFilm[] {
     .slice(0, 20);
 }
 
+// The IMDb rating the fake daily file gives a film (OMDb's differs on purpose).
+export const imdbOf = (id: number) => (6 + (id % 30) / 10).toFixed(1);
+
 export function startFake(port = 0): Promise<{ url: string; close: () => void; calls: string[] }> {
   const calls: string[] = [];
   const server = http.createServer((req, res) => {
@@ -79,6 +83,15 @@ export function startFake(port = 0): Promise<{ url: string; close: () => void; c
     const p = Number(url.searchParams.get("page") ?? 1);
     const path = url.pathname.replace(/^\/3/, "");
 
+    if (path === "/imdb/title.ratings.tsv.gz") {
+      // IMDb's daily file: every fake film, plus films we don't hold.
+      const lines = ["tconst\taverageRating\tnumVotes"];
+      for (const f of FILMS) lines.push(`tt${String(f.id).padStart(7, "0")}\t${imdbOf(f.id)}\t${50000 + f.id}`);
+      for (let i = 0; i < 5000; i++) lines.push(`tt9${String(i).padStart(7, "0")}\t5.0\t10`);
+      res.writeHead(200, { "content-type": "application/gzip" });
+      res.end(gzipSync(lines.join("\n") + "\n"));
+      return;
+    }
     if (path.startsWith("/omdb")) {
       const imdb = url.searchParams.get("i") ?? "";
       const n = Number(imdb.replace(/\D/g, "")) || 0;
@@ -124,6 +137,12 @@ export function startFake(port = 0): Promise<{ url: string; close: () => void; c
               rent: [PROVIDERS[(id + 1) % PROVIDERS.length]],
             },
           },
+        },
+        videos: {
+          results: [
+            { key: `teaser${id}`, site: "YouTube", type: "Teaser", official: true, iso_639_1: "en" },
+            { key: `trailer${id}`, site: "YouTube", type: "Trailer", official: true, iso_639_1: "en" },
+          ],
         },
         release_dates: {
           results: nl ? [{ iso_3166_1: "NL", release_dates: [{ release_date: `${nl}T00:00:00.000Z`, type: 3 }] }] : [],

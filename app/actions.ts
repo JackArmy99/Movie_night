@@ -11,7 +11,7 @@ import { saveList, ensureDetails } from "@/lib/movies";
 import * as tmdb from "@/lib/tmdb";
 import { eloUpdate } from "@/lib/elo";
 import { LbFilm, eloFor, verdictFor } from "@/lib/letterboxd";
-import { SEEN } from "@/lib/score";
+import { verdictForStars } from "@/lib/score";
 import { explain, hasClaude } from "@/lib/claude";
 
 const YEAR = 60 * 60 * 24 * 365;
@@ -111,16 +111,35 @@ export async function nextCards(genre: number, skip: number[]): Promise<{ cards:
   return { cards };
 }
 
+// An answer without stars: "unseen" (haven't seen it), "pass" (not
+// interested) or "seen" (seen it, no opinion).
 export async function swipe(movieId: number, verdict: string) {
-  if (!["superlike", "like", "dislike", "unseen", "seen"].includes(verdict)) return;
+  if (!["unseen", "pass", "seen"].includes(verdict)) return;
   const user = await me();
   await db.swipe.upsert({
     where: { userId_movieId: { userId: user.id, movieId } },
     create: { userId: user.id, movieId, verdict, source: "swipe" },
-    update: { verdict, source: "swipe" },
+    update: { verdict, stars: null, source: "swipe" },
   });
-  // Seen it now, so it no longer belongs on your watchlist.
-  if (SEEN.has(verdict)) await db.watchlistItem.deleteMany({ where: { userId: user.id, movieId } });
+  // Not interested any more, or seen it: no longer belongs on your watchlist.
+  if (verdict !== "unseen") await db.watchlistItem.deleteMany({ where: { userId: user.id, movieId } });
+}
+
+// Seen it, with 1–5 stars (half stars allowed).
+export async function rateStars(movieId: number, stars: number) {
+  if (!(stars >= 0.5 && stars <= 5)) return;
+  const user = await me();
+  const verdict = verdictForStars(stars);
+  const key = { userId_movieId: { userId: user.id, movieId } };
+  const existing = await db.swipe.findUnique({ where: key });
+  // Keep a film's "this or that" ranking if it was already a super like.
+  const elo = existing?.verdict === "superlike" && verdict === "superlike" ? existing.elo : eloFor(stars);
+  await db.swipe.upsert({
+    where: key,
+    create: { userId: user.id, movieId, verdict, stars, elo, source: "swipe" },
+    update: { verdict, stars, elo, source: "swipe" },
+  });
+  await db.watchlistItem.deleteMany({ where: { userId: user.id, movieId } });
 }
 
 export async function undoSwipe(movieId: number) {
@@ -128,10 +147,26 @@ export async function undoSwipe(movieId: number) {
   await db.swipe.deleteMany({ where: { userId: user.id, movieId } });
 }
 
-// Rate a film from its own page (or after watching it together).
-export async function rate(movieId: number, verdict: string) {
-  await swipe(movieId, verdict);
+// Rate a film from its own page: stars, or "unseen".
+export async function rate(movieId: number, answer: number | "unseen") {
+  if (answer === "unseen") await swipe(movieId, "unseen");
+  else await rateStars(movieId, answer);
   revalidatePath(`/movie/${movieId}`);
+}
+
+// The "To decide" pile: want to see it (→ watchlist) or not interested.
+export async function decide(movieId: number, want: boolean) {
+  const user = await me();
+  if (want) {
+    await db.watchlistItem.upsert({
+      where: { userId_movieId: { userId: user.id, movieId } },
+      create: { userId: user.id, movieId },
+      update: {},
+    });
+  } else {
+    await swipe(movieId, "pass");
+  }
+  revalidatePath("/watchlist");
 }
 
 // ---------- "this or that" ----------
@@ -177,15 +212,22 @@ export async function toggleWatchlist(movieId: number): Promise<boolean> {
 
 // "We watched it": my verdict, off both watchlists, and counted as seen for
 // my partner until they rate it themselves.
-export async function watchedTogether(movieId: number, verdict: string) {
+// "We watched it": my stars, off both watchlists, and counted as seen for
+// my partner until they rate it themselves.
+export async function watchedTogether(movieId: number, stars: number) {
   const user = await me();
-  await swipe(movieId, verdict);
+  await rateStars(movieId, stars);
   const partner = await partnerOf(user);
   if (partner) {
     await db.swipe.upsert({
       where: { userId_movieId: { userId: partner.id, movieId } },
       create: { userId: partner.id, movieId, verdict: "seen", source: "watchlist" },
+      // Only overwrite "hadn't seen it" — never a rating they already gave.
       update: {},
+    });
+    await db.swipe.updateMany({
+      where: { userId: partner.id, movieId, verdict: { in: ["unseen", "pass"] } },
+      data: { verdict: "seen", source: "watchlist" },
     });
   }
   await db.watchlistItem.deleteMany({ where: { movieId } });
@@ -218,11 +260,11 @@ export async function importBatch(films: LbFilm[]): Promise<ImportResult> {
             where: { userId_movieId: { userId: user.id, movieId: hit.id } },
           });
           // A swipe made in the app is newer and more deliberate; keep it.
-          if (!existing || existing.source !== "swipe" || existing.verdict === "unseen") {
+          if (!existing || existing.source !== "swipe" || existing.verdict === "unseen" || existing.verdict === "pass") {
             await db.swipe.upsert({
               where: { userId_movieId: { userId: user.id, movieId: hit.id } },
-              create: { userId: user.id, movieId: hit.id, verdict, elo: eloFor(f.rating, f.hearted), source: "letterboxd" },
-              update: { verdict, elo: eloFor(f.rating, f.hearted), source: "letterboxd" },
+              create: { userId: user.id, movieId: hit.id, verdict, stars: f.rating, elo: eloFor(f.rating, f.hearted), source: "letterboxd" },
+              update: { verdict, stars: f.rating, elo: eloFor(f.rating, f.hearted), source: "letterboxd" },
             });
           }
         } else if (f.watchlist) {
@@ -248,6 +290,14 @@ export async function saveServices(form: FormData) {
   await setJson("services", ids);
   revalidatePath("/settings");
   redirect("/settings?saved=services");
+}
+
+// Tick or untick one service (Tonight's service row). Shared by both of you.
+export async function setService(id: number, on: boolean) {
+  const current = await getJson<number[]>("services", []);
+  const next = on ? [...new Set([...current, id])] : current.filter((s) => s !== id);
+  await setJson("services", next);
+  revalidatePath("/tonight");
 }
 
 export async function renamePerson(form: FormData) {

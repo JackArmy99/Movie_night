@@ -3,11 +3,12 @@
 // short of that; results are cached on the Movie row for a month.
 import { getSetting, setSetting } from "./settings";
 
-const BASE = process.env.OMDB_BASE ?? "https://www.omdbapi.com/";
+const base = () => process.env.OMDB_BASE ?? "https://www.omdbapi.com/";
 const DAILY_LIMIT = Number(process.env.OMDB_DAILY_LIMIT ?? 950);
 
 export type OmdbRatings = {
   imdbRating: number | null;
+  imdbVotes: number | null;
   rtScore: number | null;
   metascore: number | null;
 };
@@ -30,7 +31,7 @@ export async function omdbRatings(imdbId: string): Promise<OmdbRatings | null> {
   if (used >= DAILY_LIMIT) return null;
   await setSetting(counterKey, String(used + 1));
 
-  const url = new URL(BASE);
+  const url = new URL(base());
   url.searchParams.set("i", imdbId);
   url.searchParams.set("apikey", key);
   const res = await fetch(url, { cache: "no-store" });
@@ -38,6 +39,7 @@ export async function omdbRatings(imdbId: string): Promise<OmdbRatings | null> {
   const d = (await res.json()) as {
     Response?: string;
     imdbRating?: string;
+    imdbVotes?: string;
     Metascore?: string;
     Ratings?: { Source: string; Value: string }[];
   };
@@ -45,6 +47,7 @@ export async function omdbRatings(imdbId: string): Promise<OmdbRatings | null> {
   const rt = d.Ratings?.find((r) => r.Source === "Rotten Tomatoes")?.Value;
   return {
     imdbRating: num(d.imdbRating),
+    imdbVotes: num(d.imdbVotes),
     rtScore: rt ? num(rt) : null,
     metascore: num(d.Metascore),
   };

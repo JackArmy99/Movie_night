@@ -8,13 +8,14 @@
 // separately and combined so a film you'd both like beats one only one of you
 // would love.
 
-export type Verdict = "superlike" | "like" | "seen" | "dislike" | "unseen";
+export type Verdict = "superlike" | "like" | "seen" | "dislike" | "unseen" | "pass";
 
 export type Seed = {
   userId: string;
   movieId: number;
   verdict: Verdict;
   elo: number;
+  stars?: number | null;
 };
 
 export type Scored = {
@@ -27,18 +28,42 @@ export type Scored = {
 
 // Verdicts that mean "has seen it" — a film like this is never suggested.
 export const SEEN: ReadonlySet<string> = new Set(["superlike", "like", "seen", "dislike"]);
+// Hasn't seen it, but "not interested": never suggested either. Not in SEEN —
+// the film still counts as unwatched.
+export const PASS = "pass";
 
-export function seedWeight(verdict: string, elo = 1000): number {
+// Stars → verdict. 4½–5 a super like (and so in "this or that"), 3–4 a like,
+// 2½ and below a dislike. A Letterboxd heart lifts a 3★+ film to a super like.
+export function verdictForStars(stars: number, hearted = false): "superlike" | "like" | "dislike" {
+  if (stars >= 4.5 || (hearted && stars >= 3)) return "superlike";
+  if (stars >= 3) return "like";
+  return "dislike";
+}
+
+// How much a rated film steers suggestions, by stars (below the super likes).
+function weightForStars(stars: number): number {
+  if (stars >= 4) return 1.2;
+  if (stars >= 3.5) return 0.8;
+  if (stars >= 3) return 0.4;
+  if (stars >= 2.5) return -0.5;
+  if (stars >= 2) return -1;
+  return -1.5;
+}
+
+export function seedWeight(verdict: string, elo = 1000, stars?: number | null): number {
   switch (verdict) {
     case "superlike":
-      // 2..5 depending on where it sits in your "this or that" ranking.
-      return 3 + Math.max(-1, Math.min(2, (elo - 1000) / 200));
+      // 2..5 depending on where it sits in your "this or that" ranking; a
+      // 4½★ starts a little below a 5★.
+      return (stars != null && stars < 5 ? 2.5 : 3) + Math.max(-1, Math.min(2, (elo - 1000) / 200));
     case "like":
-      return 1;
+    case "dislike":
+      if (stars != null) return weightForStars(stars);
+      return verdict === "like" ? 1 : -1.5;
+    case PASS:
+      return -0.3;
     case "seen":
       return 0.4;
-    case "dislike":
-      return -1.5;
     default:
       return 0;
   }
@@ -62,7 +87,7 @@ export function scoreCandidates(input: {
 
   for (const seed of seeds) {
     if (!users.includes(seed.userId)) continue;
-    let w = seedWeight(seed.verdict, seed.elo);
+    let w = seedWeight(seed.verdict, seed.elo, seed.stars);
     if (!w) continue;
     if (genre && genresOf.get(seed.movieId)?.includes(genre)) w *= 1.5;
     const list = recs.get(seed.movieId) ?? [];
@@ -171,4 +196,28 @@ export function qualityFactor(voteAverage: number, voteCount: number): number {
   const prior = 500;
   const q = (voteAverage * voteCount + 6.5 * prior) / (voteCount + prior);
   return Math.max(0.05, (q - 5) / 2) ** 1.5;
+}
+
+export type Reputation = {
+  voteAverage: number;
+  voteCount: number;
+  imdbRating?: number | null;
+  imdbVotes?: number | null;
+  rtScore?: number | null;
+};
+
+// The score we trust most for a film, on a 0–10 scale, and how many votes
+// stand behind it: IMDb when known (TMDB's own score is the fallback), mixed
+// 70/30 with Rotten Tomatoes' critics score when there is one.
+export function trustedRating(m: Reputation): { rating: number; votes: number } {
+  const imdb = m.imdbRating != null;
+  const base = imdb ? m.imdbRating! : m.voteAverage;
+  const votes = imdb ? (m.imdbVotes ?? Math.max(m.voteCount, 1000)) : m.voteCount;
+  const rating = m.rtScore != null ? 0.7 * base + 0.3 * (m.rtScore / 10) : base;
+  return { rating, votes };
+}
+
+export function reputationFactor(m: Reputation): number {
+  const { rating, votes } = trustedRating(m);
+  return qualityFactor(rating, votes);
 }

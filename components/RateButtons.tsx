@@ -3,36 +3,79 @@
 import { useState, useTransition } from "react";
 import { rate, watchedTogether } from "@/app/actions";
 
-const OPTIONS = [
-  { v: "dislike", label: "✕ Didn't like", on: "bg-red-500 text-white" },
-  { v: "like", label: "♥ Liked", on: "bg-green-500 text-ink" },
-  { v: "superlike", label: "★ Loved", on: "bg-accent text-ink" },
-  { v: "unseen", label: "Not seen", on: "bg-sky-500 text-ink" },
-];
-
-// together: also clears it off both watchlists and marks it seen for your
-// partner (they can still give their own verdict later).
-export function RateButtons({ movieId, initial, together = false }: { movieId: number; initial?: string | null; together?: boolean }) {
-  const [current, setCurrent] = useState(initial ?? null);
+// 1–5 stars, plus "Not seen". together: "We watched it" — also clears it off
+// both watchlists and marks it seen for your partner (they can still give
+// their own stars later).
+export function RateButtons({
+  movieId,
+  initialStars,
+  initialUnseen = false,
+  together = false,
+}: {
+  movieId: number;
+  initialStars?: number | null;
+  initialUnseen?: boolean;
+  together?: boolean;
+}) {
+  const [stars, setStars] = useState<number | null>(initialStars ?? null);
+  const [unseen, setUnseen] = useState(initialUnseen && !initialStars);
   const [pending, start] = useTransition();
-  const options = together ? OPTIONS.filter((o) => o.v !== "unseen") : OPTIONS;
+
+  const pick = (n: number) =>
+    start(async () => {
+      setStars(n);
+      setUnseen(false);
+      await (together ? watchedTogether(movieId, n) : rate(movieId, n));
+    });
+
   return (
-    <div className={`grid gap-2 ${together ? "grid-cols-3" : "grid-cols-4"}`}>
-      {options.map((o) => (
+    <div className="flex items-center gap-1">
+      {[1, 2, 3, 4, 5].map((n) => {
+        const full = stars != null && stars >= n;
+        const half = stars != null && !full && stars >= n - 0.5;
+        return (
+          <button
+            key={n}
+            disabled={pending}
+            onClick={() => pick(n)}
+            aria-label={`${n} star${n > 1 ? "s" : ""}`}
+            className={`relative text-3xl leading-none transition active:scale-90 ${full ? "text-accent" : "text-gray-600"}`}
+          >
+            ★
+            {/* Half star: the left half of a gold star over the grey one. */}
+            {half && (
+              <span className="absolute inset-y-0 left-0 w-1/2 overflow-hidden text-accent" aria-hidden>
+                ★
+              </span>
+            )}
+          </button>
+        );
+      })}
+      {!together && (
         <button
-          key={o.v}
           disabled={pending}
           onClick={() =>
             start(async () => {
-              setCurrent(o.v);
-              await (together ? watchedTogether(movieId, o.v) : rate(movieId, o.v));
+              setStars(null);
+              setUnseen(true);
+              await rate(movieId, "unseen");
             })
           }
-          className={`rounded-xl px-2 py-2.5 text-xs font-semibold ${current === o.v ? o.on : "border border-line bg-panel"}`}
+          className={`ml-auto rounded-xl px-3 py-2 text-xs font-semibold ${unseen ? "bg-sky-500 text-ink" : "border border-line bg-panel"}`}
         >
-          {o.label}
+          Not seen
         </button>
-      ))}
+      )}
     </div>
+  );
+}
+
+export function StarsText({ stars }: { stars: number }) {
+  const full = Math.floor(stars);
+  return (
+    <span className="text-accent">
+      {"★".repeat(full)}
+      {stars - full >= 0.5 ? "½" : ""}
+    </span>
   );
 }

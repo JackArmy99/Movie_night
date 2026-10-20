@@ -12,9 +12,23 @@ providers = JustWatch, NL release dates), OMDb (IMDb/RT/Metacritic), optional
 Claude (`lib/claude.ts`, Haiku 5.5 default, monthly cap).
 
 ## How it works
-- `Swipe.verdict`: superlike | like | dislike | seen | unseen. Anything but
-  `unseen` means **seen → never suggested** (`SEEN` in `lib/score.ts`). This
-  exclusion is the app's whole reason to exist; keep it airtight.
+- `Swipe.verdict`: superlike | like | dislike | seen | unseen | pass, plus
+  `Swipe.stars` (0.5–5). Stars are what people give; the verdict is derived by
+  `verdictForStars()` (4½+ superlike, 3–4 like, ≤2½ dislike) and drives "this or
+  that", counts and `SEEN`. `SEEN` films are **never suggested**, which is the
+  app's whole reason to exist, so keep it airtight. `pass` ("not interested") isn't
+  seen but is excluded too (either person's pass hides it in "both" mode).
+- Swipe deck: `directionFor()` in `lib/swipe.ts` maps a drag's compass bearing
+  to 1★ (270°, left) … 3★ (0°, up) … 5★ (90°, right); the bottom 135° = unseen.
+  Unseen films form the "To decide" pile (`lib/pile.ts`, Watchlist tab) with
+  trailers (`Movie.trailerKey`, TMDB `videos`, `pickTrailer()`).
+- Tabs: Swipe · Search (rate any film) · Tonight (all suggestions: moods/genre,
+  services, `FilterBar`) · Watchlist · Cinema. `/suggest` only redirects.
+- Ratings: IMDb from IMDb's daily `title.ratings.tsv.gz` (`lib/imdb.ts`, Vercel
+  Cron → `/api/cron/imdb`, `CRON_SECRET`); OMDb for Rotten Tomatoes/Metacritic and
+  same-day IMDb, never overwriting a fresh file value. `trustedRating()` = IMDb
+  (else TMDB) mixed 70/30 with RT; `suggest()` looks up the top 40 taste matches
+  and re-ranks by it.
 - `lib/score.ts` is pure (tested): each seen film's TMDB recommendations score
   candidates; super likes weigh by Elo rank, dislikes subtract; two people
   combine as `a + b + min(a, b)` so agreement wins.
@@ -40,6 +54,8 @@ Claude (`lib/claude.ts`, Haiku 5.5 default, monthly cap).
   must reach it by the container IP (`hostname -I`), not localhost — Playwright
   sends localhost through the proxy, which only accepts HTTPS tunnels.
   `scripts/fake-tmdb.ts` (set `TMDB_BASE`/`OMDB_BASE`) still serves the tests.
+- Read API base URLs when used (`base()`), never at import: tests import these
+  modules before pointing them at `scripts/fake-tmdb.ts`.
 - Cookies are `secure` only when `x-forwarded-proto` is https (always on
   Vercel); over plain http a secure cookie is dropped and sign-in loops.
 - Ranking multiplies taste by `qualityFactor()` (vote-count-shrunk TMDB score,

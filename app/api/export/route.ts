@@ -21,6 +21,7 @@ export async function GET() {
       title: s.movie.title,
       year: s.movie.year,
       verdict: s.verdict,
+      stars: s.stars,
       rankScore: Math.round(s.elo),
       source: s.source,
       at: s.updatedAt,

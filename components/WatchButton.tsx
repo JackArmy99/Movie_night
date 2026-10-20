@@ -10,7 +10,7 @@ export function WatchButton({ movieId, initial }: { movieId: number; initial: bo
     <button
       onClick={() => start(async () => setOn(await toggleWatchlist(movieId)))}
       disabled={pending}
-      className={`ml-auto shrink-0 rounded-lg px-2.5 py-1 text-xs ${on ? "bg-accent text-ink" : "border border-line text-gray-300"}`}
+      className={`ml-auto shrink-0 whitespace-nowrap rounded-lg px-2.5 py-1 text-xs ${on ? "bg-accent text-ink" : "border border-line text-gray-300"}`}
     >
       {on ? "📌 Saved" : "+ Watchlist"}
     </button>

@@ -25,7 +25,7 @@ export default async function Rank() {
       <Header title="This or that" back="/" />
       {!pair ? (
         <div className="card p-6 text-center text-gray-400">
-          Super like at least two films (swipe up) and they'll appear here to rank.{" "}
+          Give at least two films 5★ (swipe right) and they'll appear here to rank.{" "}
           <Link href="/swipe" className="text-accent">
             Go swipe
           </Link>

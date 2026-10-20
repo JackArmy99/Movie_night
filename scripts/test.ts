@@ -7,9 +7,21 @@ import { execSync } from "node:child_process";
 import { parseCsv } from "../lib/csv";
 import { mergeExport, verdictFor, eloFor } from "../lib/letterboxd";
 import { eloUpdate, nextPair } from "../lib/elo";
-import { passes, parseFilters, qualityFactor, scoreCandidates, seedWeight } from "../lib/score";
+import {
+  passes,
+  parseFilters,
+  qualityFactor,
+  reputationFactor,
+  scoreCandidates,
+  seedWeight,
+  trustedRating,
+  verdictForStars,
+} from "../lib/score";
+import { directionFor } from "../lib/swipe";
+import { pickTrailer } from "../lib/tmdb";
+import { parseRatingLine } from "../lib/imdb";
 import { toIcs } from "../lib/ics";
-import { startFake, FILMS, recsFor } from "./fake-tmdb";
+import { startFake, FILMS, recsFor, imdbOf } from "./fake-tmdb";
 
 let failures = 0;
 async function test(name: string, fn: () => void | Promise<void>) {
@@ -137,6 +149,64 @@ async function main() {
     assert.ok(passes({ ...base, releaseDate: "2010-05-01" }, {}, []));
   });
 
+  await test("Swipe directions: left 1★ … up 3★ … right 5★, down = not seen", () => {
+    const stars = (dx: number, dy: number) => {
+      const a = directionFor(dx, dy);
+      return a?.kind === "stars" ? a.stars : a?.kind;
+    };
+    assert.equal(stars(-120, 0), 1);
+    assert.equal(stars(-100, -100), 2);
+    assert.equal(stars(0, -120), 3);
+    assert.equal(stars(100, -100), 4);
+    assert.equal(stars(120, 0), 5);
+    assert.equal(stars(0, 120), "unseen");
+    assert.equal(stars(80, 80), "unseen", "down-right (135°) is 'not seen'");
+    assert.equal(stars(120, 35), 5, "slightly below horizontal still 5★");
+    assert.equal(stars(-120, 35), 1);
+    assert.equal(directionFor(40, -40), null, "a short drag springs back");
+  });
+
+  await test("Stars → verdict and weights: graded, 'not interested' mildly negative", () => {
+    assert.equal(verdictForStars(5), "superlike");
+    assert.equal(verdictForStars(4.5), "superlike");
+    assert.equal(verdictForStars(4), "like");
+    assert.equal(verdictForStars(3), "like");
+    assert.equal(verdictForStars(2.5), "dislike");
+    assert.equal(verdictForStars(3, true), "superlike", "a heart lifts 3★+");
+    const w = (n: number) => seedWeight(verdictForStars(n), 1000, n);
+    assert.ok(w(5) > w(4.5) && w(4.5) > w(4) && w(4) > w(3.5) && w(3.5) > w(3) && w(3) > 0);
+    assert.ok(0 > w(2.5) && w(2.5) > w(2) && w(2) > w(1));
+    assert.ok(seedWeight("pass") < 0 && seedWeight("pass") > w(2.5));
+  });
+
+  await test("Trailers: official English trailer beats teasers and non-YouTube", () => {
+    assert.equal(
+      pickTrailer([
+        { key: "vimeo", site: "Vimeo", type: "Trailer", official: true, iso_639_1: "en" },
+        { key: "teaser", site: "YouTube", type: "Teaser", official: true, iso_639_1: "en" },
+        { key: "fan", site: "YouTube", type: "Trailer", official: false, iso_639_1: "en" },
+        { key: "nl", site: "YouTube", type: "Trailer", official: true, iso_639_1: "nl" },
+        { key: "old", site: "YouTube", type: "Trailer", official: true, iso_639_1: "en", published_at: "2010-01-01" },
+        { key: "new", site: "YouTube", type: "Trailer", official: true, iso_639_1: "en", published_at: "2020-01-01" },
+      ]),
+      "new",
+    );
+    assert.equal(pickTrailer([{ key: "t", site: "YouTube", type: "Teaser" }]), "t", "teaser if nothing better");
+    assert.equal(pickTrailer([{ key: "c", site: "YouTube", type: "Clip" }]), null);
+  });
+
+  await test("IMDb/RT: trusted over TMDB, and they decide the order", () => {
+    const tmdbOnly = { voteAverage: 7.9, voteCount: 20000 };
+    assert.equal(trustedRating(tmdbOnly).rating, 7.9);
+    assert.equal(trustedRating({ ...tmdbOnly, imdbRating: 6.1, imdbVotes: 300000 }).rating, 6.1, "IMDb wins over TMDB");
+    assert.ok(Math.abs(trustedRating({ ...tmdbOnly, imdbRating: 8, rtScore: 90 }).rating - 8.3) < 1e-9, "70/30 with RT");
+    const acclaimed = reputationFactor({ voteAverage: 7, voteCount: 5000, imdbRating: 8.3, imdbVotes: 400000, rtScore: 96 });
+    const middling = reputationFactor({ voteAverage: 7, voteCount: 5000, imdbRating: 6.4, imdbVotes: 400000, rtScore: 41 });
+    assert.ok(acclaimed > 3 * middling, `${acclaimed} vs ${middling}`);
+    assert.deepEqual(parseRatingLine("tt0113277\t8.3\t712345"), { imdbId: "tt0113277", rating: 8.3, votes: 712345 });
+    assert.equal(parseRatingLine("tconst\taverageRating\tnumVotes"), null);
+  });
+
   await test("Calendar feed: valid iCalendar, all-day, escaped, folded", () => {
     const ics = toIcs("Test", [
       { uid: "nl-1@x", date: "2026-12-31", title: "Film; with, specials", description: "x".repeat(200) },
@@ -160,6 +230,7 @@ async function main() {
   process.env.TMDB_TOKEN = "fake-short-key";
   process.env.OMDB_BASE = `${fake.url}/omdb`;
   process.env.OMDB_KEY = "fake";
+  process.env.IMDB_RATINGS_URL = `${fake.url}/imdb/title.ratings.tsv.gz`;
   process.env.ANTHROPIC_API_KEY = "";
   process.env.DATABASE_URL_UNPOOLED = dbUrl;
   execSync("npx prisma migrate reset --force --skip-seed --skip-generate", { stdio: "ignore", env: process.env, shell: true as unknown as string });
@@ -241,6 +312,45 @@ async function main() {
     assert.equal(fake.calls.length, before, "calendar should be served from cache");
     const matches = await matchingIds(list.map((m) => m.id));
     assert.ok(matches instanceof Set);
+  });
+
+  await test("Trailers are stored with a film's details", async () => {
+    const m = await db.movie.findFirst({ where: { trailerAt: { not: null } } });
+    assert.ok(m, "no film got a trailer lookup");
+    assert.equal(m!.trailerKey, `trailer${m!.id}`);
+  });
+
+  await test("'Not interested' is never suggested, but doesn't count as seen", async () => {
+    const before = await suggest({ users: [a.id, b.id], genre: 0, filters: {} });
+    const top = before[0].movie.id;
+    await db.swipe.create({ data: { userId: b.id, movieId: top, verdict: "pass" } });
+    const after = await suggest({ users: [a.id, b.id], genre: 0, filters: {} });
+    assert.ok(!after.some((s) => s.movie.id === top), "passed film still suggested in 'both' mode");
+    const { SEEN } = await import("../lib/score");
+    assert.ok(!SEEN.has("pass"));
+  });
+
+  await test("IMDb daily file: updates only films we hold, with votes", async () => {
+    const { syncImdbRatings } = await import("../lib/imdb");
+    const held = await db.movie.count({ where: { imdbId: { not: null } } });
+    const res = await syncImdbRatings();
+    assert.equal(res.held, held);
+    assert.equal(res.matched, held, "every held film is in the file");
+    const m = await db.movie.findFirst({ where: { imdbAt: { not: null } } });
+    assert.ok(m);
+    assert.equal(m!.imdbRating, Number(imdbOf(m!.id)));
+    assert.equal(m!.imdbVotes, 50000 + m!.id);
+    assert.equal(await db.movie.count({ where: { imdbId: { startsWith: "tt9" } } }), 0, "no rows invented");
+  });
+
+  await test("OMDb never overwrites a fresh IMDb-file rating", async () => {
+    const { ensureRatings } = await import("../lib/movies");
+    const m = await db.movie.findFirst({ where: { imdbAt: { not: null } } });
+    await db.movie.update({ where: { id: m!.id }, data: { ratingsAt: null } });
+    await ensureRatings([m!.id]);
+    const after = await db.movie.findUnique({ where: { id: m!.id } });
+    assert.equal(after!.imdbRating, Number(imdbOf(m!.id)), "OMDb replaced the IMDb file's rating");
+    assert.ok(after!.rtScore != null, "RT still filled in from OMDb");
   });
 
   fake.close();

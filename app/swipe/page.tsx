@@ -19,8 +19,9 @@ export default async function SwipeGenres() {
     <main className="pb-tabs">
       <Header title="Swipe" />
       <p className="mb-4 text-sm text-gray-400">
-        The most-watched films come first: the ones you've most likely seen. Swipe <b>right</b> liked, <b>left</b>{" "}
-        didn't, <b>up</b> loved it, <b>down</b> haven't seen.
+        The most-watched films come first: the ones you've most likely seen. Swipe the card towards the stars you'd
+        give it: <b>left</b> 1★, <b>up</b> 3★, <b>right</b> 5★ (diagonals for 2★ and 4★). Swipe <b>down</b> if you
+        haven't seen it; it goes to "To decide" on the Watchlist tab.
       </p>
       <div className="grid grid-cols-2 gap-3">
         {[{ id: 0, name: "All genres" }, ...GENRES].map((g) => (

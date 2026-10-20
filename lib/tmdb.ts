@@ -4,7 +4,8 @@
 // TMDB_TOKEN can be either the long "API Read Access Token" or the short "API
 // Key" — the settings page shows both and people paste whichever they see.
 
-const BASE = process.env.TMDB_BASE ?? "https://api.themoviedb.org/3";
+// Read when used, not at import, so tests can point it at a fake server.
+const base = () => process.env.TMDB_BASE ?? "https://api.themoviedb.org/3";
 export const IMG = "https://image.tmdb.org/t/p/";
 export const REGION = "NL";
 
@@ -34,7 +35,36 @@ export type TmdbDetails = TmdbListItem & {
   genres?: { id: number; name: string }[];
   providers: Providers;
   nlRelease: string | null;
+  trailerKey: string | null;
 };
+
+export type TmdbVideo = {
+  key: string;
+  site: string;
+  type: string;
+  official?: boolean;
+  iso_639_1?: string;
+  published_at?: string;
+};
+
+// The best trailer: YouTube, a Trailer over a Teaser, official first, English
+// first, newest first.
+export function pickTrailer(videos: TmdbVideo[]): string | null {
+  const rank = (v: TmdbVideo) => [
+    v.type === "Trailer" ? 0 : 1,
+    v.official ? 0 : 1,
+    v.iso_639_1 === "en" ? 0 : 1,
+  ];
+  const best = videos
+    .filter((v) => v.site === "YouTube" && v.key && (v.type === "Trailer" || v.type === "Teaser"))
+    .sort((a, b) => {
+      const ra = rank(a);
+      const rb = rank(b);
+      for (let i = 0; i < ra.length; i++) if (ra[i] !== rb[i]) return ra[i] - rb[i];
+      return (b.published_at ?? "").localeCompare(a.published_at ?? "");
+    })[0];
+  return best?.key ?? null;
+}
 
 export class TmdbMissingKey extends Error {
   constructor() {
@@ -49,7 +79,7 @@ export function hasTmdb(): boolean {
 async function get<T>(path: string, params: Record<string, string | number> = {}): Promise<T> {
   const token = process.env.TMDB_TOKEN?.trim();
   if (!token) throw new TmdbMissingKey();
-  const url = new URL(BASE + path);
+  const url = new URL(base() + path);
   for (const [k, v] of Object.entries(params)) url.searchParams.set(k, String(v));
   const headers: Record<string, string> = { accept: "application/json" };
   // The read-access token is a long JWT; the v3 key is 32 hex characters.
@@ -120,6 +150,12 @@ export async function search(title: string, year?: number): Promise<TmdbListItem
   return null;
 }
 
+// Free-text film search (the Search tab): best matches first.
+export async function searchMany(query: string): Promise<TmdbListItem[]> {
+  const res = await get<Page>("/search/movie", { query, include_adult: "false", region: REGION });
+  return res.results;
+}
+
 type RawProvider = { provider_id: number; provider_name: string; logo_path: string | null };
 type RawDetails = TmdbListItem & {
   runtime?: number | null;
@@ -132,6 +168,7 @@ type RawDetails = TmdbListItem & {
   release_dates?: {
     results?: { iso_3166_1: string; release_dates: { release_date: string; type: number }[] }[];
   };
+  videos?: { results?: TmdbVideo[] };
 };
 
 const toProvider = (p: RawProvider): Provider => ({
@@ -143,7 +180,10 @@ const toProvider = (p: RawProvider): Provider => ({
 // One call for everything a film page needs.
 export async function details(id: number): Promise<TmdbDetails> {
   const d = await get<RawDetails>(`/movie/${id}`, {
-    append_to_response: "external_ids,watch/providers,release_dates",
+    append_to_response: "external_ids,watch/providers,release_dates,videos",
+    // Videos in any language: plenty of films only have an English trailer
+    // filed under a different language, and pickTrailer prefers English anyway.
+    include_video_language: "en,nl,null",
   });
   const nl = d["watch/providers"]?.results?.[REGION];
   const nlDates = d.release_dates?.results?.find((r) => r.iso_3166_1 === REGION);
@@ -163,6 +203,7 @@ export async function details(id: number): Promise<TmdbDetails> {
       buy: (nl?.buy ?? []).map(toProvider),
     },
     nlRelease: cinema ?? null,
+    trailerKey: pickTrailer(d.videos?.results ?? []),
   };
 }
 
@@ -186,6 +227,8 @@ export async function dutchServices(): Promise<Provider[]> {
   });
   return res.results.map(toProvider);
 }
+
+export const trailerUrl = (key: string) => `https://www.youtube.com/watch?v=${key}`;
 
 export function poster(path: string | null | undefined, size = "w342"): string | null {
   return path ? `${IMG}${size}${path}` : null;

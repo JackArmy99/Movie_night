@@ -14,5 +14,5 @@ export async function middleware(req: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/((?!login|api/calendar|_next|manifest.webmanifest|icon|apple-icon|favicon).*)"],
+  matcher: ["/((?!login|api/calendar|api/cron|_next|manifest.webmanifest|icon|apple-icon|favicon).*)"],
 };

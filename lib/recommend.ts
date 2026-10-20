@@ -4,12 +4,14 @@ import { db } from "./db";
 import { ensureDetails, ensureRatings, ensureRecs, providersOf, saveList } from "./movies";
 import { getMyServices } from "./settings";
 import { hasTmdb, topRated } from "./tmdb";
-import { Filters, MIN_VOTES, passes, passesCheap, qualityFactor, scoreCandidates, SEEN, Seed, Verdict } from "./score";
+import { Filters, MIN_VOTES, PASS, passes, passesCheap, reputationFactor, scoreCandidates, SEEN, Seed, Verdict } from "./score";
 
 // Fresh TMDB lookups allowed per page load. Each one is two quick calls; the
 // rest arrive on the next visit (lists are cached for two months).
 const RECS_PER_LOAD = 25;
 const CHECK_LIMIT = 80;
+// How many of the best taste matches get IMDb/RT lookups before ranking.
+const RERANK = 40;
 
 export type Suggestion = {
   movie: Movie;
@@ -34,17 +36,24 @@ export async function suggest(opts: {
     where: { userId: { in: opts.users } },
     include: { movie: { select: { genreIds: true, recsAt: true, title: true } } },
   });
-  const excluded = new Set(swipes.filter((s) => SEEN.has(s.verdict)).map((s) => s.movieId));
-  const seeds: Seed[] = swipes
-    .filter((s) => SEEN.has(s.verdict))
-    .map((s) => ({ userId: s.userId, movieId: s.movieId, verdict: s.verdict as Verdict, elo: s.elo }));
+  // Seen by either of you, or "not interested" for either of you: never shown.
+  const counts = (v: string) => SEEN.has(v) || v === PASS;
+  const excluded = new Set(swipes.filter((s) => counts(s.verdict)).map((s) => s.movieId));
+  const seeds: Seed[] = swipes.filter((s) => counts(s.verdict)).map((s) => ({
+    userId: s.userId,
+    movieId: s.movieId,
+    verdict: s.verdict as Verdict,
+    elo: s.elo,
+    stars: s.stars,
+  }));
 
   // Fetch missing "also liked" lists, best seeds first: super likes, then
-  // likes, preferring the genre being browsed.
-  const rank = (s: (typeof swipes)[number]) =>
-    (s.verdict === "superlike" ? 0 : s.verdict === "like" ? 2 : 4) + (inGenre(s.movie.genreIds) ? 0 : 1);
+  // likes, then dislikes, "not interested" last; preferring the genre being
+  // browsed.
+  const order: Record<string, number> = { superlike: 0, like: 2, dislike: 4, [PASS]: 6 };
+  const rank = (s: (typeof swipes)[number]) => (order[s.verdict] ?? 6) + (inGenre(s.movie.genreIds) ? 0 : 1);
   const missing = swipes
-    .filter((s) => SEEN.has(s.verdict) && s.verdict !== "seen" && !s.movie.recsAt)
+    .filter((s) => counts(s.verdict) && s.verdict !== "seen" && !s.movie.recsAt)
     .sort((a, b) => rank(a) - rank(b) || b.elo - a.elo);
   const toFetch = [...new Set(missing.map((s) => s.movieId))].slice(0, RECS_PER_LOAD);
   if (hasTmdb()) await ensureRecs(toFetch);
@@ -72,7 +81,7 @@ export async function suggest(opts: {
   });
   const byId = new Map(candidateRows.map((m) => [m.id, m]));
 
-  type Cand = { movie: Movie; score: number; because: number[]; fallback: boolean };
+  type Cand = { movie: Movie; score: number; taste: number; because: number[]; fallback: boolean };
   let pool: Cand[] = scored
     .map((s) => ({ ...s, movie: byId.get(s.movieId)! }))
     .filter((c) => c.movie && inGenre(c.movie.genreIds) && passesCheap(c.movie, opts.filters))
@@ -80,10 +89,25 @@ export async function suggest(opts: {
     .filter((c) => c.movie.voteCount >= MIN_VOTES)
     .map((c) => ({
       movie: c.movie,
-      score: c.score * qualityFactor(c.movie.voteAverage, c.movie.voteCount),
+      taste: c.score,
+      score: c.score * reputationFactor(c.movie),
       because: c.because,
       fallback: false,
     }))
+    .sort((a, b) => b.score - a.score);
+
+  // Taste decides what's eligible; IMDb and Rotten Tomatoes decide the order
+  // among good matches. Look up scores for the front of the list (cached, so
+  // only a film's first appearance costs a lookup) and re-rank with them.
+  const front = pool.slice(0, RERANK).map((c) => c.movie.id);
+  await ensureDetails(front);
+  await ensureRatings(front);
+  const rated = new Map((await db.movie.findMany({ where: { id: { in: front } } })).map((m) => [m.id, m]));
+  pool = pool
+    .map((c) => {
+      const m = rated.get(c.movie.id);
+      return m ? { ...c, movie: m, score: c.taste * reputationFactor(m) } : c;
+    })
     .sort((a, b) => b.score - a.score);
 
   // Not enough taste data yet (or a niche genre): pad with acclaimed films.
@@ -97,7 +121,7 @@ export async function suggest(opts: {
         if (excluded.has(m.id) || seenIds.has(m.id)) continue;
         if (!inGenre(m.genreIds) || !passesCheap(m, opts.filters)) continue;
         seenIds.add(m.id);
-        pool.push({ movie: m, score: 0, because: [], fallback: true });
+        pool.push({ movie: m, score: 0, taste: 0, because: [], fallback: true });
       }
       if (pool.length >= limit * 2) break;
     }

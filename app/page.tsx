@@ -43,7 +43,7 @@ export default async function Home() {
           <div key={p.name} className="card p-4">
             <div className="text-sm text-gray-400">{p.name}</div>
             <div className="text-3xl font-bold">{p.c.seen}</div>
-            <div className="text-xs text-gray-400">films seen · {p.c.loved} super liked</div>
+            <div className="text-xs text-gray-400">films seen · {p.c.loved} at 4½–5★</div>
           </div>
         ))}
       </section>
@@ -59,8 +59,8 @@ export default async function Home() {
       )}
 
       <section className="grid grid-cols-2 gap-3">
-        <Tile href="/suggest" icon="✨" title="Suggestions" sub="By genre, with sliders" />
-        <Tile href="/tonight" icon="🍿" title="Tonight" sub="3 picks, right now" />
+        <Tile href="/tonight" icon="🍿" title="Tonight" sub="Suggestions, moods & filters" />
+        <Tile href="/search" icon="🔍" title="Search & rate" sub="Seen one at the cinema?" />
         <Tile href="/rank" icon="⚖️" title="This or that" sub={`Rank your ${mine.loved} favourites`} />
         <Tile href="/watchlist" icon="📌" title="Watchlist" sub={`${watchlist.length} films`} />
         <Tile href="/calendar" icon="📅" title="In cinemas" sub="Dutch release dates" />

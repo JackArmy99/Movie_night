@@ -4,9 +4,17 @@ import { db } from "@/lib/db";
 import { me, partnerOf } from "@/lib/session";
 import { suggest } from "@/lib/recommend";
 import { getMyServices } from "@/lib/settings";
+import { serviceList } from "@/lib/services";
 import { ensureDetails, ensureRatings, providersOf } from "@/lib/movies";
+import { parseFilters, passes } from "@/lib/score";
+import { hasOmdb } from "@/lib/omdb";
+import { hasClaude } from "@/lib/claude";
 import { Header, Nav } from "@/components/Nav";
 import { MovieRow } from "@/components/MovieRow";
+import { FilterBar } from "@/components/FilterBar";
+import { GenrePicker } from "@/components/GenrePicker";
+import { ServicePicker } from "@/components/ServicePicker";
+import { WhyButton } from "@/components/WhyButton";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -20,47 +28,42 @@ const MOODS = [
   { key: "cry", label: "😢 A good cry", genres: [18] },
   { key: "epic", label: "🗺️ Epic", genres: [12, 14, 10752] },
 ];
-const LENGTHS = [
-  { v: "100", label: "Under 1h40" },
-  { v: "120", label: "Under 2h" },
-  { v: "150", label: "Under 2h30" },
-  { v: "", label: "Any length" },
-];
+const STEP = 5;
 
-type SP = { mood?: string; len?: string; mine?: string };
+type SP = Record<string, string | undefined>;
 
-function href(sp: SP, patch: Partial<SP>) {
+function href(sp: SP, patch: SP) {
   const next = { ...sp, ...patch };
   const q = new URLSearchParams(Object.entries(next).filter(([, v]) => v) as [string, string][]);
   return `/tonight?${q.toString()}`;
 }
 
+// Everything suggestion-shaped lives here: a mood or genre, who it's for, the
+// sliders, and the services you have.
 export default async function Tonight({ searchParams }: { searchParams: SP }) {
   await me();
-  const sp: SP = { mine: "1", len: "120", ...searchParams };
+  const sp = searchParams;
+  const [services, mine] = await Promise.all([serviceList(), getMyServices()]);
   return (
     <main className="pb-tabs space-y-4">
       <Header title="Tonight" />
       <section className="space-y-3">
         <div className="flex flex-wrap gap-2">
           {MOODS.map((m) => (
-            <Link key={m.key} href={href(sp, { mood: sp.mood === m.key ? "" : m.key })} className={sp.mood === m.key ? "chip-on" : "chip"}>
+            <Link
+              key={m.key}
+              href={href(sp, { mood: sp.mood === m.key ? undefined : m.key, g: undefined, n: undefined })}
+              className={sp.mood === m.key ? "chip-on" : "chip"}
+            >
               {m.label}
             </Link>
           ))}
+          <GenrePicker />
         </div>
-        <div className="flex flex-wrap gap-2">
-          {LENGTHS.map((l) => (
-            <Link key={l.label} href={href(sp, { len: l.v })} className={(sp.len ?? "") === l.v ? "chip-on" : "chip"}>
-              {l.label}
-            </Link>
-          ))}
-          <Link href={href(sp, { mine: sp.mine === "1" ? "0" : "1" })} className={sp.mine === "1" ? "chip-on" : "chip"}>
-            On our services
-          </Link>
-        </div>
+        <ServicePicker services={services} initial={mine} />
+        <FilterBar rtAvailable={hasOmdb()} />
       </section>
-      <Suspense key={JSON.stringify(sp)} fallback={<div className="card h-40 animate-pulse" />}>
+      <Suspense key={JSON.stringify(sp)} fallback={<Loading />}>
         <Picks sp={sp} />
       </Suspense>
       <Nav active="/tonight" />
@@ -68,39 +71,73 @@ export default async function Tonight({ searchParams }: { searchParams: SP }) {
   );
 }
 
+function Loading() {
+  return (
+    <div className="space-y-3">
+      <p className="text-center text-sm text-gray-400">Finding films you haven't seen…</p>
+      {[0, 1, 2].map((i) => (
+        <div key={i} className="card h-40 animate-pulse" />
+      ))}
+    </div>
+  );
+}
+
 async function Picks({ sp }: { sp: SP }) {
   const user = await me();
   const partner = await partnerOf(user);
-  const users = partner ? [user.id, partner.id] : [user.id];
-  const genres = MOODS.find((m) => m.key === sp.mood)?.genres ?? [];
+  const users = sp.for === "me" || !partner ? [user.id] : [user.id, partner.id];
+  const genres = MOODS.find((m) => m.key === sp.mood)?.genres ?? (Number(sp.g) ? [Number(sp.g)] : []);
   const mine = await getMyServices();
-  const filters = { maxRuntime: Number(sp.len) || undefined, servicesOnly: sp.mine === "1" && mine.length > 0 };
+  const filters = parseFilters(sp);
+  if (!mine.length) filters.servicesOnly = false;
+  const limit = Math.min(30, Math.max(STEP, Number(sp.n) || STEP));
 
-  const picks = await suggest({ users, genre: 0, extraGenres: genres, filters, limit: 3 });
+  const picks = await suggest({ users, genre: 0, extraGenres: genres, filters, limit });
   const picked = new Set(picks.map((p) => p.movie.id));
 
-  // Your watchlist too: films one of you already wanted to see.
-  const saved = await db.watchlistItem.findMany({ include: { movie: true }, orderBy: { addedAt: "desc" } });
-  const savedMovies = [...new Map(saved.map((s) => [s.movieId, s.movie])).values()];
-  await ensureDetails(savedMovies.map((m) => m.id).slice(0, 30));
-  await ensureRatings(savedMovies.map((m) => m.id).slice(0, 30));
-  const fresh = await db.movie.findMany({ where: { id: { in: savedMovies.map((m) => m.id) } } });
-  const fromWatchlist = fresh
-    .filter((m) => !picked.has(m.id))
+  // Your watchlist too, with the same filters: films one of you already
+  // wanted to see.
+  const saved = await db.watchlistItem.findMany({ select: { movieId: true }, orderBy: { addedAt: "desc" } });
+  const savedIds = [...new Set(saved.map((s) => s.movieId))].filter((id) => !picked.has(id)).slice(0, 30);
+  await ensureDetails(savedIds);
+  await ensureRatings(savedIds);
+  const fromWatchlist = (await db.movie.findMany({ where: { id: { in: savedIds } } }))
     .filter((m) => !genres.length || m.genreIds.some((g) => genres.includes(g)))
-    .filter((m) => !filters.maxRuntime || !m.runtime || m.runtime <= filters.maxRuntime)
-    .filter((m) => !filters.servicesOnly || (providersOf(m)?.stream ?? []).some((p) => mine.includes(p.id)))
+    .filter((m) => passes({ ...m, streamIds: (providersOf(m)?.stream ?? []).map((p) => p.id) }, filters, mine))
     .slice(0, 3);
 
-
+  const unexplained = picks.filter((s) => !s.movie.why && !s.fallback).slice(0, 10);
   return (
     <div className="space-y-5">
       <section className="space-y-3">
-        <h2 className="font-semibold">Our top 3 for tonight</h2>
+        <h2 className="font-semibold">{users.length > 1 ? "Top picks for the two of you" : "Top picks for you"}</h2>
+        {hasClaude() && unexplained.length > 0 && (
+          <WhyButton
+            ids={unexplained.map((s) => s.movie.id)}
+            because={Object.fromEntries(unexplained.map((s) => [s.movie.id, s.because.map((b) => b.title)]))}
+          />
+        )}
         {picks.length ? (
-          picks.map((s) => <MovieRow key={s.movie.id} m={s.movie} mine={mine} because={s.because} why={s.movie.why} onWatchlist={s.onWatchlist} />)
+          picks.map((s) => (
+            <MovieRow
+              key={s.movie.id}
+              m={s.movie}
+              mine={mine}
+              because={s.because}
+              why={s.movie.why}
+              onWatchlist={s.onWatchlist}
+              note={s.fallback ? "Highly rated — rate more films for personal picks" : undefined}
+            />
+          ))
         ) : (
-          <p className="card p-4 text-sm text-gray-400">Nothing fits. Try another mood, a longer film or switch off "On our services".</p>
+          <p className="card p-4 text-sm text-gray-400">
+            Nothing fits. Try another mood, loosen the filters or switch off &quot;On our services&quot;.
+          </p>
+        )}
+        {picks.length >= limit && limit < 30 && (
+          <Link href={href(sp, { n: String(limit + STEP) })} scroll={false} className="btn-ghost w-full text-sm">
+            Show {STEP} more
+          </Link>
         )}
       </section>
       {fromWatchlist.length > 0 && (
@@ -112,10 +149,9 @@ async function Picks({ sp }: { sp: SP }) {
         </section>
       )}
       {sp.mine === "1" && !mine.length && (
-        <p className="text-center text-xs text-gray-400">
-          Pick your services in <Link href="/settings" className="text-accent">Settings</Link> for "On our services" to work.
-        </p>
+        <p className="text-center text-xs text-gray-400">Tick your services above for &quot;On our services&quot; to work.</p>
       )}
+      <p className="text-center text-xs text-gray-500">Streaming info: JustWatch via TMDB</p>
     </div>
   );
 }

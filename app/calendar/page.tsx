@@ -8,6 +8,7 @@ import { poster } from "@/lib/tmdb";
 import { Header, Nav } from "@/components/Nav";
 import { WatchButton } from "@/components/WatchButton";
 import { CopyLink } from "@/components/CopyLink";
+import { TrailerRow } from "@/components/Trailer";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -47,7 +48,7 @@ export default async function Calendar({ searchParams }: { searchParams: { f?: s
         <section key={month} className="space-y-2">
           <h2 className="text-sm font-semibold uppercase tracking-wide text-gray-400">{month}</h2>
           {list.map((m) => (
-            <div key={m.id} className="card flex items-center gap-3 p-2">
+            <TrailerRow key={m.id} trailerKey={m.trailerKey} title={m.title} aside={<WatchButton movieId={m.id} initial={saved.has(m.id)} />}>
               <div className="w-10 text-center">
                 <div className="text-lg font-bold">{new Date(m.nlRelease!).getDate()}</div>
                 <div className="text-[10px] uppercase text-gray-400">
@@ -63,8 +64,7 @@ export default async function Calendar({ searchParams }: { searchParams: { f?: s
                 <div className="truncate font-semibold">{m.title}</div>
                 {matches.has(m.id) && <div className="text-xs text-accent">✨ Looks like your kind of film</div>}
               </Link>
-              <WatchButton movieId={m.id} initial={saved.has(m.id)} />
-            </div>
+            </TrailerRow>
           ))}
         </section>
       ))}

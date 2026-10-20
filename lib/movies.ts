@@ -40,9 +40,12 @@ export async function ensureDetails(ids: number[]): Promise<void> {
   if (!tmdb.hasTmdb() || !ids.length) return;
   const rows = await db.movie.findMany({
     where: { id: { in: ids } },
-    select: { id: true, detailsAt: true, providersAt: true },
+    select: { id: true, detailsAt: true, providersAt: true, trailerAt: true },
   });
-  const stale = rows.filter((r) => older(r.detailsAt, RATINGS_TTL) || older(r.providersAt, PROVIDERS_TTL));
+  // trailerAt: films looked up before trailers existed get one more lookup.
+  const stale = rows.filter(
+    (r) => older(r.detailsAt, RATINGS_TTL) || older(r.providersAt, PROVIDERS_TTL) || !r.trailerAt,
+  );
   await pmap(stale, 8, async ({ id }) => {
     const d = await tmdb.details(id);
     const base = fromList(d);
@@ -59,6 +62,8 @@ export async function ensureDetails(ids: number[]): Promise<void> {
         imdbId: d.imdb_id ?? null,
         providers: d.providers as unknown as Prisma.InputJsonValue,
         nlRelease: d.nlRelease,
+        trailerKey: d.trailerKey,
+        trailerAt: new Date(),
         detailsAt: new Date(),
         providersAt: new Date(),
       },
@@ -71,13 +76,20 @@ export async function ensureRatings(ids: number[]): Promise<void> {
   if (!hasOmdb() || !ids.length) return;
   const rows = await db.movie.findMany({
     where: { id: { in: ids }, imdbId: { not: null } },
-    select: { id: true, imdbId: true, ratingsAt: true },
+    select: { id: true, imdbId: true, ratingsAt: true, imdbAt: true },
   });
   const stale = rows.filter((r) => older(r.ratingsAt, RATINGS_TTL));
-  await pmap(stale, 6, async ({ id, imdbId }) => {
+  await pmap(stale, 6, async ({ id, imdbId, imdbAt }) => {
     const r = await omdbRatings(imdbId!);
     if (!r) return;
-    await db.movie.update({ where: { id }, data: { ...r, ratingsAt: new Date() } });
+    // IMDb's own daily file is the better IMDb source; OMDb only fills in
+    // films it hasn't covered yet.
+    const { imdbRating, imdbVotes, ...rest } = r;
+    const fromFile = imdbAt && Date.now() - imdbAt.getTime() < 3 * DAY;
+    await db.movie.update({
+      where: { id },
+      data: { ...rest, ...(fromFile ? {} : { imdbRating, imdbVotes }), ratingsAt: new Date() },
+    });
   });
 }
 

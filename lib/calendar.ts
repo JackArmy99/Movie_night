@@ -37,7 +37,13 @@ export async function upcomingDutch(): Promise<Movie[]> {
 export async function matchingIds(candidates: number[]): Promise<Set<number>> {
   const swipes = await db.swipe.findMany({ where: { verdict: { in: [...SEEN] } } });
   const users = [...new Set(swipes.map((s) => s.userId))];
-  const seeds: Seed[] = swipes.map((s) => ({ userId: s.userId, movieId: s.movieId, verdict: s.verdict as Verdict, elo: s.elo }));
+  const seeds: Seed[] = swipes.map((s) => ({
+    userId: s.userId,
+    movieId: s.movieId,
+    verdict: s.verdict as Verdict,
+    elo: s.elo,
+    stars: s.stars,
+  }));
   const rows = await db.movie.findMany({
     where: { id: { in: seeds.map((s) => s.movieId) } },
     select: { id: true, recIds: true, genreIds: true },

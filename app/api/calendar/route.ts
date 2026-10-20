@@ -3,6 +3,7 @@ import { db } from "@/lib/db";
 import { calendarKey } from "@/lib/token";
 import { matchingIds, upcomingDutch } from "@/lib/calendar";
 import { toIcs } from "@/lib/ics";
+import { trailerUrl } from "@/lib/tmdb";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -29,7 +30,9 @@ export async function GET(req: NextRequest) {
       uid: `nl-${m.id}@movie-night`,
       date: m.nlRelease!,
       title: `🎬 ${m.title}${saved.has(m.id) ? " 📌" : matches.has(m.id) ? " ✨" : ""}`,
-      description: `${m.overview}\n\nIn Dutch cinemas from today.`,
+      description:
+        `${m.overview}\n\nIn Dutch cinemas from today.` +
+        (m.trailerKey ? `\n\nTrailer: ${trailerUrl(m.trailerKey)}` : ""),
       url: `${origin}/movie/${m.id}`,
     }));
 

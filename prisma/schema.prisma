@@ -39,6 +39,11 @@ model Movie {
   providers   Json?
   providersAt DateTime?
 
+  // IMDb rating + vote count: from IMDb's daily ratings file (imdbAt) or,
+  // for films added since the last daily run, from OMDb.
+  imdbVotes Int?
+  imdbAt    DateTime?
+
   // From OMDb.
   imdbRating Float?
   rtScore    Int?
@@ -52,6 +57,10 @@ model Movie {
   // Dutch cinema release date (YYYY-MM-DD) when known.
   nlRelease String?
 
+  // YouTube id of the official trailer, when TMDB has one.
+  trailerKey String?
+  trailerAt  DateTime?
+
   // Claude's one-line "why you'd both like it".
   why   String?
   whyAt DateTime?
@@ -64,10 +73,13 @@ model Movie {
 //   superlike | like | dislike  — seen it, with an opinion
 //   seen                        — seen it, no opinion (e.g. Letterboxd, unrated)
 //   unseen                      — hasn't seen it (stays eligible for suggestions)
+//   pass                        — hasn't seen it, not interested (never suggested)
 model Swipe {
   userId      String
   movieId     Int
   verdict     String
+  // 0.5–5 stars. Swiping gives whole stars; Letterboxd keeps its half stars.
+  stars       Float?
   // Ranking score among super likes ("this or that").
   elo         Float    @default(1000)
   comparisons Int      @default(0)

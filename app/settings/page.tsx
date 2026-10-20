@@ -1,7 +1,8 @@
 import { db } from "@/lib/db";
 import { allUsers, me } from "@/lib/session";
-import { getJson, getMyServices, setJson } from "@/lib/settings";
-import { dutchServices, hasTmdb, IMG, Provider } from "@/lib/tmdb";
+import { getMyServices } from "@/lib/settings";
+import { hasTmdb, IMG } from "@/lib/tmdb";
+import { serviceList } from "@/lib/services";
 import { hasOmdb } from "@/lib/omdb";
 import { hasClaude, monthlyCap, spentThisMonth, MODEL } from "@/lib/claude";
 import { renamePerson, resetDeck, saveServices, switchUser } from "../actions";
@@ -10,36 +11,17 @@ import { ImportForm } from "@/components/ImportForm";
 
 export const dynamic = "force-dynamic";
 
-// The big Dutch services first; TMDB lists dozens of small ones.
-const POPULAR = [8, 119, 337, 72, 1899, 350, 71, 1773, 2, 3];
-
-async function services(): Promise<Provider[]> {
-  const cached = await getJson<{ at: number; list: Provider[] } | null>("services_list", null);
-  if (cached && Date.now() - cached.at < 7 * 864e5) return cached.list;
-  if (!hasTmdb()) return cached?.list ?? [];
-  try {
-    const list = await dutchServices();
-    await setJson("services_list", { at: Date.now(), list });
-    return list;
-  } catch {
-    return cached?.list ?? [];
-  }
-}
-
 export default async function Settings({ searchParams }: { searchParams: { saved?: string } }) {
   const user = await me();
   const [users, mine, list, spent, counts] = await Promise.all([
     allUsers(),
     getMyServices(),
-    services(),
+    serviceList(),
     spentThisMonth(),
     db.swipe.groupBy({ by: ["userId", "source"], _count: true }),
   ]);
-  const sorted = [...list].sort((a, b) => {
-    const ia = POPULAR.indexOf(a.id);
-    const ib = POPULAR.indexOf(b.id);
-    return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib) || a.name.localeCompare(b.name);
-  });
+  const sorted = list;
+  const lastImdb = (await db.movie.aggregate({ _max: { imdbAt: true } }))._max.imdbAt;
   const fromLb = (id: string) => counts.find((c) => c.userId === id && c.source === "letterboxd")?._count ?? 0;
 
   return (
@@ -105,13 +87,22 @@ export default async function Settings({ searchParams }: { searchParams: { saved
       <section className="card space-y-2 p-4 text-sm">
         <h2 className="font-semibold">Connections and costs</h2>
         <Row ok={hasTmdb()} label="TMDB (films, posters, where to watch)" note="free" />
-        <Row ok={hasOmdb()} label="OMDb (IMDb, Rotten Tomatoes, Metacritic)" note="free, 1,000 lookups/day" />
+        <Row ok={hasOmdb()} label="OMDb (Rotten Tomatoes, Metacritic, same-day IMDb)" note="free, 1,000 lookups/day" />
+        <Row
+          ok={Boolean(process.env.CRON_SECRET)}
+          label="IMDb ratings, refreshed daily from IMDb's own file"
+          note={lastImdb ? `last ${lastImdb.toLocaleDateString("en-GB", { day: "numeric", month: "short" })}` : "free, needs CRON_SECRET"}
+        />
         <Row
           ok={hasClaude()}
           label={`Claude explanations (${MODEL})`}
           note={hasClaude() ? `$${spent.toFixed(3)} of $${monthlyCap()} this month` : "optional"}
         />
       </section>
+
+      <p className="px-1 text-xs text-gray-500">
+        Film data and where-to-watch: TMDB and JustWatch. IMDb ratings: IMDb non-commercial datasets.
+      </p>
 
       <section className="card space-y-3 p-4">
         <h2 className="font-semibold">Your data</h2>

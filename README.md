@@ -2,15 +2,17 @@
 
 Films the two of you will **both** like — and never one you've already seen.
 
-- **Swipe** through the most-watched films per genre: right liked, left didn't,
-  up loved it, down haven't seen.
+- **Swipe** through the most-watched films per genre towards the stars you'd
+  give: left 1★, up 3★, right 5★ (diagonals 2★ and 4★); down = haven't seen.
+- **To decide**: films you haven't seen, with their trailer → want to see / not interested.
+- **Search** any film (seen one at the cinema?) and give it stars.
 - **Import Letterboxd** (the export .zip, straight from your phone).
-- **Suggestions per genre** with sliders: IMDb, Rotten Tomatoes, year, length,
-  and "only on our services" (Netflix, Videoland… via JustWatch).
+- **Tonight**: suggestions by mood or genre with sliders (IMDb, Rotten Tomatoes,
+  year, length), your streaming services (via JustWatch), for both of you or just
+  you. IMDb and Rotten Tomatoes scores steer the order.
 - **This or that**: rank your super likes in a couple of minutes.
-- **Tonight**: mood + length → 3 picks.
 - **Shared watchlist**: films you both want float to the top.
-- **Dutch cinema calendar**, subscribable in your phone's calendar.
+- **Dutch cinema calendar** with trailers, subscribable in your phone's calendar.
 
 ## Put it online (one-off, ~15 minutes, free)
 
@@ -28,6 +30,7 @@ Films the two of you will **both** like — and never one you've already seen.
    | `SESSION_SECRET` | any long random text (mash the keyboard, 40+ characters) |
    | `TMDB_TOKEN` | TMDB → Settings → API → **API Read Access Token** |
    | `OMDB_KEY` | the key OMDb emailed you |
+   | `CRON_SECRET` | any random text; protects the daily IMDb ratings update |
    | `ANTHROPIC_API_KEY` | optional — Claude's "why you'd like it" (about 1p a click, capped at $3/month) |
 
 4. **Deployments → ⋯ → Redeploy.** Open the address Vercel shows
@@ -40,7 +43,8 @@ and survives redeploys; **Settings → Download a backup** gives you a copy.
 
 ## What it costs
 
-TMDB, JustWatch data, Vercel Hobby and Neon free tier: **€0**. OMDb free key:
+TMDB, JustWatch data, IMDb's daily ratings file, Vercel Hobby (incl. its daily
+cron) and Neon free tier: **€0**. OMDb free key:
 1,000 lookups a day (the app stops at 950 and caches each film for a month).
 Claude explanations: optional, about 1p per batch of 10, monthly cap via
 `CLAUDE_MONTHLY_CAP_USD` (default $3).

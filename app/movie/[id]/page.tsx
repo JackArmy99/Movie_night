@@ -7,17 +7,16 @@ import { genreName } from "@/lib/genres";
 import { getMyServices } from "@/lib/settings";
 import { Header, Nav } from "@/components/Nav";
 import { Scores } from "@/components/MovieRow";
-import { RateButtons } from "@/components/RateButtons";
+import { RateButtons, StarsText } from "@/components/RateButtons";
+import { Trailer } from "@/components/Trailer";
 import { WatchButton } from "@/components/WatchButton";
 
 export const dynamic = "force-dynamic";
 
 const VERDICT: Record<string, string> = {
-  superlike: "★ loved it",
-  like: "♥ liked it",
-  dislike: "✕ didn't like it",
   seen: "has seen it",
   unseen: "hasn't seen it",
+  pass: "isn't interested",
 };
 
 export default async function MoviePage({ params }: { params: { id: string } }) {
@@ -45,7 +44,7 @@ export default async function MoviePage({ params }: { params: { id: string } }) 
 
   return (
     <main className="pb-tabs space-y-4">
-      <Header title={m.title} back="/suggest" />
+      <Header title={m.title} back="/tonight" />
       <div className="flex gap-4">
         {img && <img src={img} alt="" className="w-36 shrink-0 rounded-xl object-cover" />}
         <div className="space-y-2">
@@ -62,13 +61,21 @@ export default async function MoviePage({ params }: { params: { id: string } }) 
 
       {m.why && <p className="card p-3 text-sm">✨ {m.why}</p>}
       <p className="text-sm leading-relaxed text-gray-300">{m.overview}</p>
+      {m.trailerKey && <Trailer trailerKey={m.trailerKey} title={m.title} />}
 
       <section className="space-y-2">
-        <h2 className="font-semibold">Your verdict</h2>
-        <RateButtons movieId={m.id} initial={mySwipe?.verdict} />
+        <h2 className="font-semibold">Your stars</h2>
+        <RateButtons movieId={m.id} initialStars={mySwipe?.stars} initialUnseen={mySwipe?.verdict === "unseen"} />
         {partner && (
           <p className="text-sm text-gray-400">
-            {partner.name} {theirSwipe ? VERDICT[theirSwipe.verdict] : "hasn't said yet"}
+            {partner.name}{" "}
+            {theirSwipe?.stars ? (
+              <StarsText stars={theirSwipe.stars} />
+            ) : theirSwipe ? (
+              VERDICT[theirSwipe.verdict] ?? "has seen it"
+            ) : (
+              "hasn't said yet"
+            )}
             {watch.some((w) => w.userId === partner.id) ? " · on their watchlist" : ""}
           </p>
         )}

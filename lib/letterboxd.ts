@@ -5,6 +5,7 @@
 // with stars), watchlist.csv and likes/films.csv (the hearts). All share Name,
 // Year, Letterboxd URI.
 import { parseCsv } from "./csv";
+import { verdictForStars } from "./score";
 
 export type LbFilm = {
   name: string;
@@ -64,16 +65,12 @@ export function mergeExport(files: { name: string; text: string }[]): LbFilm[] {
   return [...films.values()];
 }
 
-// Stars → swipe. 4.5–5 is a super like, 3–4 a like, 2.5 and below a dislike.
-// Watched with no stars is "seen": counts as watched, weak signal. A heart on
-// anything not rated low is a favourite, so a super like (3½★ ♥ means "rated
-// fairly, but I love it").
+// Stars → swipe, using the same thresholds as swiping in the app
+// (verdictForStars). Watched with no stars is "seen": watched, weak signal;
+// with a heart it's a favourite.
 export function verdictFor(rating: number | null, hearted = false): "superlike" | "like" | "dislike" | "seen" {
-  if (hearted && (rating === null || rating >= 3)) return "superlike";
-  if (rating === null) return "seen";
-  if (rating >= 4.5) return "superlike";
-  if (rating >= 3) return "like";
-  return "dislike";
+  if (rating === null) return hearted ? "superlike" : "seen";
+  return verdictForStars(rating, hearted);
 }
 
 // Starting place in the "this or that" ranking: five stars above four and a
