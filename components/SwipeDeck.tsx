@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { nextCards, rateStars, swipe, undoSwipe } from "@/app/actions";
 import type { Card, DeckFilters } from "@/lib/deck";
-import { directionFor, MIN_DISTANCE, STAR_BEARINGS, SwipeAnswer, vectorFor } from "@/lib/swipe";
+import { directionFor, MIN_DISTANCE, PASS_BEARING, STAR_BEARINGS, SwipeAnswer, UNSEEN_BEARING, vectorFor } from "@/lib/swipe";
 
 type Stars = 1 | 2 | 3 | 4 | 5;
 const STARS: Stars[] = [1, 2, 3, 4, 5];
@@ -88,7 +88,7 @@ export function SwipeDeck({ genre, filters = {} }: { genre: number; filters?: De
         const len = Math.hypot(from.dx, from.dy);
         v = { x: from.dx / len, y: from.dy / len };
       } else {
-        v = a.kind === "unseen" ? { x: 0, y: 1 } : vectorFor(STAR_BEARINGS[a.stars]);
+        v = vectorFor(a.kind === "unseen" ? UNSEEN_BEARING : a.kind === "pass" ? PASS_BEARING : STAR_BEARINGS[a.stars]);
       }
       setFlying({ answer: a, x: v.x * FLY, y: v.y * FLY });
       // A tiny tap of feedback (Android; iPhones ignore it).
@@ -100,7 +100,7 @@ export function SwipeDeck({ genre, filters = {} }: { genre: number; filters?: De
         setDrag({ dx: 0, dy: 0, active: false });
         setDone((d) => d + 1);
       }, 240);
-      const save = a.kind === "unseen" ? swipe(card.id, "unseen") : rateStars(card.id, a.stars);
+      const save = a.kind === "stars" ? rateStars(card.id, a.stars) : swipe(card.id, a.kind);
       save.catch(() => setError("That answer didn't save — check your connection."));
     },
     [queue, flying],
@@ -120,6 +120,7 @@ export function SwipeDeck({ genre, filters = {} }: { genre: number; filters?: De
       const n = Number(e.key);
       if (n >= 1 && n <= 5) answer({ kind: "stars", stars: n as Stars });
       if (e.key === "ArrowDown") answer({ kind: "unseen" });
+      if (e.key === "x" || e.key === "X") answer({ kind: "pass" });
       if (e.key === "Backspace") undo();
     };
     window.addEventListener("keydown", onKey);
@@ -165,12 +166,20 @@ export function SwipeDeck({ genre, filters = {} }: { genre: number; filters?: De
             </div>
           );
         })}
+        {/* The two "haven't seen" targets: down-left not for me, down-right maybe. */}
         <div
-          className={`pointer-events-none absolute bottom-0 left-1/2 z-20 -translate-x-1/2 rounded-full border px-3 py-1 text-xs font-semibold transition ${
+          className={`pointer-events-none absolute bottom-0 left-[4%] z-20 rounded-full border px-3 py-1 text-xs font-semibold transition ${
+            aiming?.kind === "pass" ? `scale-110 border-red-400 ${armed ? "bg-red-400 text-ink" : "bg-red-400/30 text-red-300"}` : "border-line bg-panel text-gray-400"
+          }`}
+        >
+          ↙ Not for me
+        </div>
+        <div
+          className={`pointer-events-none absolute bottom-0 right-[4%] z-20 rounded-full border px-3 py-1 text-xs font-semibold transition ${
             aiming?.kind === "unseen" ? `scale-110 border-sky-400 ${armed ? "bg-sky-400 text-ink" : "bg-sky-400/30 text-sky-300"}` : "border-line bg-panel text-gray-400"
           }`}
         >
-          ↓ Haven&apos;t seen
+          Haven&apos;t seen ↘
         </div>
 
         <div
@@ -229,10 +238,14 @@ export function SwipeDeck({ genre, filters = {} }: { genre: number; filters?: De
               {aiming && (
                 <div
                   className={`absolute left-1/2 top-8 -translate-x-1/2 -rotate-6 whitespace-nowrap rounded-lg border-4 bg-black/50 px-3 py-1 text-2xl font-black transition-opacity ${
-                    aiming.kind === "unseen" ? "border-sky-400 text-sky-400" : "border-accent text-accent"
+                    aiming.kind === "unseen"
+                      ? "border-sky-400 text-sky-400"
+                      : aiming.kind === "pass"
+                        ? "border-red-400 text-red-400"
+                        : "border-accent text-accent"
                   } ${armed ? "opacity-100" : "opacity-50"}`}
                 >
-                  {aiming.kind === "unseen" ? "NOT SEEN" : <StarStamp stars={aiming.stars} />}
+                  {aiming.kind === "unseen" ? "NOT SEEN" : aiming.kind === "pass" ? "NOT FOR ME" : <StarStamp stars={aiming.stars} />}
                 </div>
               )}
             </div>
@@ -246,7 +259,7 @@ export function SwipeDeck({ genre, filters = {} }: { genre: number; filters?: De
 
       {error && card && <p className="mt-1 text-center text-sm text-red-400">{error}</p>}
 
-      <p className="mt-2 text-center text-xs text-gray-500">Swipe towards the stars you&apos;d give it · down if you haven&apos;t seen it</p>
+      <p className="mt-2 text-center text-xs text-gray-500">Swipe towards the stars · ↙ not for me · ↘ haven&apos;t seen</p>
     </div>
   );
 }

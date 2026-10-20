@@ -18,7 +18,7 @@ import {
   verdictForStars,
   blendCloseness,
 } from "../lib/score";
-import { directionFor } from "../lib/swipe";
+import { directionFor, starsFromX } from "../lib/swipe";
 import { pickTrailer } from "../lib/tmdb";
 import { parseRatingLine } from "../lib/imdb";
 import { toIcs } from "../lib/ics";
@@ -161,10 +161,22 @@ async function main() {
     assert.equal(stars(100, -100), 4);
     assert.equal(stars(120, 0), 5);
     assert.equal(stars(0, 120), "unseen");
-    assert.equal(stars(80, 80), "unseen", "down-right (135°) is 'not seen'");
+    assert.equal(stars(80, 80), "unseen", "down-right (135°) is 'haven't seen'");
+    assert.equal(stars(-80, 80), "pass", "down-left (225°) is 'not for me'");
+    assert.equal(stars(-10, 120), "pass", "just left of straight down is 'not for me'");
     assert.equal(stars(120, 35), 5, "slightly below horizontal still 5★");
     assert.equal(stars(-120, 35), 1);
     assert.equal(directionFor(40, -40), null, "a short drag springs back");
+  });
+
+  await test("Grid re-rating: finger position → half stars; far left cancels", () => {
+    assert.equal(starsFromX(100, 100), 5);
+    assert.equal(starsFromX(200, 100), 5, "past the right edge stays 5★");
+    assert.equal(starsFromX(50, 100), 2.5);
+    assert.equal(starsFromX(51, 100), 3);
+    assert.equal(starsFromX(8, 100), 0.5);
+    assert.equal(starsFromX(2, 100), null, "far left = cancel");
+    assert.equal(starsFromX(-30, 100), null);
   });
 
   await test("Stars → verdict and weights: graded, 'not interested' mildly negative", () => {

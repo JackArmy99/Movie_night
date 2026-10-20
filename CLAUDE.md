@@ -19,7 +19,8 @@ Claude (`lib/claude.ts`, Haiku 5.5 default, monthly cap).
   app's whole reason to exist, so keep it airtight. `pass` ("not interested") isn't
   seen but is excluded too (either person's pass hides it in "both" mode).
 - Swipe deck: `directionFor()` in `lib/swipe.ts` maps a drag's compass bearing
-  to 1★ (270°, left) … 3★ (0°, up) … 5★ (90°, right); the bottom 135° = unseen.
+  to 1★ (270°, left) … 3★ (0°, up) … 5★ (90°, right); in the bottom 135°,
+  down-left = `pass` ("not for me"), down-right/straight down = unseen.
   Unseen films form the "To decide" pile (`lib/pile.ts`, Watchlist tab) with
   trailers (`Movie.trailerKey`, TMDB `videos`, `pickTrailer()`).
 - Tabs: Swipe (opens `/swipe/0` straight on the cards) · Search (rate any film)
@@ -27,6 +28,11 @@ Claude (`lib/claude.ts`, Haiku 5.5 default, monthly cap).
   only redirect. Tonight and the deck share `ControlBar`: a genre button
   (`GenreChoices`; moods only in Tonight, seen-counts only in the deck) and one
   Filters panel, with a one-line summary while shut.
+- Search tab = search to rate + "Your films": a poster grid (`RatedGrid`) with
+  filter chips (`?show=`, star levels / seen / not for me), sort (`?sort=`) and
+  paging (`?n=`). Hold a poster ~0.4 s then slide to re-rate (`starsFromX`, half
+  steps; far left cancels); a non-passive touchmove listener stops the page
+  scrolling meanwhile.
 - Server actions live in `app/actions/<area>.ts`; `app/actions/index.ts`
   re-exports them, so components import from `@/app/actions`.
 - "Similar to…" (`?like=id,id`, max 5; `components/SimilarPicker.tsx`) works in
