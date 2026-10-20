@@ -31,3 +31,13 @@ export async function setJson(key: string, value: unknown): Promise<void> {
 export async function getMyServices(): Promise<number[]> {
   return getJson<number[]>("services", []);
 }
+
+// Add `by` to a numeric setting in one atomic step and return the new value.
+// (Read-then-write would lose counts when lookups run in parallel.)
+export async function incrementSetting(key: string, by: number): Promise<number> {
+  const rows = await db.$queryRaw<{ value: string }[]>`
+    INSERT INTO "Setting" ("key", "value") VALUES (${key}, ${String(by)})
+    ON CONFLICT ("key") DO UPDATE SET "value" = (COALESCE(NULLIF("Setting"."value", ''), '0')::int + ${by})::text
+    RETURNING "value"`;
+  return Number(rows[0]?.value ?? by);
+}

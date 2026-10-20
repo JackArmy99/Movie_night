@@ -11,24 +11,20 @@ import { hasClaude } from "@/lib/claude";
 import { Header, Nav } from "@/components/Nav";
 import { MovieRow } from "@/components/MovieRow";
 import { FilterBar } from "@/components/FilterBar";
-import { GenrePicker } from "@/components/GenrePicker";
+import { ControlBar } from "@/components/ControlBar";
+import { GenreChoices } from "@/components/GenreChoices";
+import { MOODS } from "@/lib/moods";
+import { genreName } from "@/lib/genres";
 import { ServicePicker } from "@/components/ServicePicker";
 import { SimilarPicker } from "@/components/SimilarPicker";
 import { parseLike } from "@/lib/similar";
 import { WhyButton } from "@/components/WhyButton";
 
+const ANY_GENRE = "🎞️ Any genre";
+
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
-const MOODS = [
-  { key: "laugh", label: "😂 Laugh", genres: [35] },
-  { key: "tense", label: "😬 Edge of seat", genres: [53, 28, 80] },
-  { key: "cosy", label: "🛋️ Cosy", genres: [10749, 10751, 16] },
-  { key: "mind", label: "🌀 Mind-bending", genres: [878, 9648] },
-  { key: "scary", label: "👻 Scary", genres: [27] },
-  { key: "cry", label: "😢 A good cry", genres: [18] },
-  { key: "epic", label: "🗺️ Epic", genres: [12, 14, 10752] },
-];
 const STEP = 5;
 
 type SP = Record<string, string | undefined>;
@@ -54,26 +50,35 @@ export default async function Tonight({ searchParams }: { searchParams: SP }) {
     db.movie.findMany({ where: { id: { in: like } }, select: { id: true, title: true } }),
   ]);
   const chosen = like.map((id) => liked.find((m) => m.id === id)).filter((m) => m !== undefined);
+  const mood = MOODS.find((m) => m.key === sp.mood);
+  const genreLabel = mood?.label ?? (Number(sp.g) ? genreName(Number(sp.g)) : ANY_GENRE);
+  // One line saying what's switched on, shown while the Filters panel is shut.
+  const myServices = services.filter((p) => mine.includes(p.id)).map((p) => p.name);
+  const summary = [
+    ...chosen.map((c) => `Like ${c.title}`),
+    ...(sp.for === "me" ? ["Just me"] : []),
+    ...(sp.mine === "1" ? [myServices.length ? `On ${myServices.slice(0, 2).join(", ")}${myServices.length > 2 ? "…" : ""}` : "On our services"] : []),
+    ...(sp.imdb ? [`IMDb ${sp.imdb}+`] : []),
+    ...(sp.rt ? [`🍅 ${sp.rt}%+`] : []),
+    ...(sp.from ? [`from ${sp.from}`] : []),
+    ...(sp.len ? [`under ${Math.floor(Number(sp.len) / 60)}h${Number(sp.len) % 60 ? String(Number(sp.len) % 60).padStart(2, "0") : ""}`] : []),
+  ];
   return (
-    <main className="pb-tabs space-y-4">
+    <main className="pb-tabs space-y-3">
       <Header title="Tonight" />
-      <section className="space-y-3">
-        <div className="flex flex-wrap gap-2">
-          {MOODS.map((m) => (
-            <Link
-              key={m.key}
-              href={href(sp, { mood: sp.mood === m.key ? undefined : m.key, g: undefined, n: undefined })}
-              className={sp.mood === m.key ? "chip-on" : "chip"}
-            >
-              {m.label}
-            </Link>
-          ))}
-          <GenrePicker />
-        </div>
-        <SimilarPicker chosen={chosen} />
-        <ServicePicker services={services} initial={mine} />
-        <FilterBar rtAvailable={rtKnown > 0} />
-      </section>
+      <ControlBar
+        genreLabel={genreLabel}
+        genreActive={genreLabel !== ANY_GENRE}
+        genrePanel={<GenreChoices mode="tonight" />}
+        summary={summary}
+        filtersPanel={
+          <>
+            <SimilarPicker chosen={chosen} />
+            <ServicePicker services={services} initial={mine} />
+            <FilterBar rtAvailable={rtKnown > 0} />
+          </>
+        }
+      />
       <Suspense key={JSON.stringify(sp)} fallback={<Loading />}>
         <Picks sp={sp} />
       </Suspense>
@@ -104,16 +109,22 @@ async function Picks({ sp }: { sp: SP }) {
   const limit = Math.min(30, Math.max(STEP, Number(sp.n) || STEP));
 
   const like = parseLike(sp.like);
-  const picks = await suggest({ users, genre: 0, extraGenres: genres, filters, limit, like });
+  // Your picks, and your watchlist with the same filters (films one of you
+  // already wanted to see) — looked up side by side, not one after the other.
+  const watchlistFilms = async () => {
+    const saved = await db.watchlistItem.findMany({ select: { movieId: true }, orderBy: { addedAt: "desc" } });
+    const ids = [...new Set(saved.map((s) => s.movieId))].slice(0, 30);
+    await ensureDetails(ids);
+    await ensureRatings(ids);
+    return db.movie.findMany({ where: { id: { in: ids } } });
+  };
+  const [picks, saved] = await Promise.all([
+    suggest({ users, genre: 0, extraGenres: genres, filters, limit, like }),
+    watchlistFilms(),
+  ]);
   const picked = new Set(picks.map((p) => p.movie.id));
-
-  // Your watchlist too, with the same filters: films one of you already
-  // wanted to see.
-  const saved = await db.watchlistItem.findMany({ select: { movieId: true }, orderBy: { addedAt: "desc" } });
-  const savedIds = [...new Set(saved.map((s) => s.movieId))].filter((id) => !picked.has(id)).slice(0, 30);
-  await ensureDetails(savedIds);
-  await ensureRatings(savedIds);
-  const fromWatchlist = (await db.movie.findMany({ where: { id: { in: savedIds } } }))
+  const fromWatchlist = saved
+    .filter((m) => !picked.has(m.id))
     .filter((m) => !genres.length || m.genreIds.some((g) => genres.includes(g)))
     .filter((m) => passes({ ...m, streamIds: (providersOf(m)?.stream ?? []).map((p) => p.id) }, filters, mine))
     .slice(0, 3);

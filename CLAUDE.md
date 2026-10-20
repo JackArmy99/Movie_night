@@ -22,8 +22,13 @@ Claude (`lib/claude.ts`, Haiku 5.5 default, monthly cap).
   to 1★ (270°, left) … 3★ (0°, up) … 5★ (90°, right); the bottom 135° = unseen.
   Unseen films form the "To decide" pile (`lib/pile.ts`, Watchlist tab) with
   trailers (`Movie.trailerKey`, TMDB `videos`, `pickTrailer()`).
-- Tabs: Swipe · Search (rate any film) · Tonight (all suggestions: moods/genre,
-  services, `FilterBar`) · Watchlist · Cinema. `/suggest` only redirects.
+- Tabs: Swipe (opens `/swipe/0` straight on the cards) · Search (rate any film)
+  · Tonight (all suggestions) · Watchlist · Cinema. `/suggest` and `/swipe`
+  only redirect. Tonight and the deck share `ControlBar`: a genre button
+  (`GenreChoices`; moods only in Tonight, seen-counts only in the deck) and one
+  Filters panel, with a one-line summary while shut.
+- Server actions live in `app/actions/<area>.ts`; `app/actions/index.ts`
+  re-exports them, so components import from `@/app/actions`.
 - "Similar to…" (`?like=id,id`, max 5; `components/SimilarPicker.tsx`) works in
   Tonight and the swipe deck. `similarPool()` (`lib/similar.ts`) blends the
   anchors' TMDB "also liked" lists (`blendCloseness`, 1.5× for films shared by
@@ -36,7 +41,7 @@ Claude (`lib/claude.ts`, Haiku 5.5 default, monthly cap).
   bookmark (`deck:<user>:<genre>:<sig>`). No buttons on the deck screen by
   request; only the swipe, the labels and Undo.
 - Ratings: IMDb from IMDb's daily `title.ratings.tsv.gz` (`lib/imdb.ts`, Vercel
-  Cron → `/api/cron/imdb`, `CRON_SECRET`); OMDb for Rotten Tomatoes/Metacritic and
+  Cron → `/api/cron/daily` (also rebuilds the calendar), `CRON_SECRET`); OMDb for Rotten Tomatoes/Metacritic and
   same-day IMDb, never overwriting a fresh file value. `trustedRating()` = IMDb
   (else TMDB) mixed 70/30 with RT; `suggest()` looks up the top 40 taste matches
   and re-ranks by it.
@@ -56,6 +61,14 @@ Claude (`lib/claude.ts`, Haiku 5.5 default, monthly cap).
   watched/ratings/watchlist by title+year, sends batches of 20 to `importBatch`.
 
 ## Rules
+- **Speed:** functions run in Frankfurt (`vercel.json` `regions: ["fra1"]`), next to
+  the Neon database; never remove that. Batch database writes per lookup batch
+  (`writeAll` in `lib/movies.ts`); OMDb goes through `omdbBatch()` (one status
+  read, one atomic quota reservation via `incrementSetting`, misses remembered as
+  `ratingsAt`). Measured 20 Oct with a 90 ms simulated distance: cold Tonight
+  321 → 148 queries, 6.9 s → 2.5 s; same region ≈ 0.5 s.
+- Every tab has a `loading.tsx` (`components/Skeleton.tsx`, uses `NavBar`, which
+  does no database work).
 - Never hand-date a migration; `npx prisma migrate dev --name x`.
 - `npm test` (needs a DB with "test" in its name) + `npx tsc --noEmit` +
   `npx next build` before pushing.

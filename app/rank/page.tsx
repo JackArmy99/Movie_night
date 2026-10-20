@@ -26,7 +26,7 @@ export default async function Rank() {
       {!pair ? (
         <div className="card p-6 text-center text-gray-400">
           Give at least two films 5★ (swipe right) and they'll appear here to rank.{" "}
-          <Link href="/swipe" className="text-accent">
+          <Link href="/swipe/0" className="text-accent">
             Go swipe
           </Link>
         </div>

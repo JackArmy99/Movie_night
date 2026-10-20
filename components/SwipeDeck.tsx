@@ -63,9 +63,19 @@ export function SwipeDeck({ genre, filters = {} }: { genre: number; filters?: De
     refill();
   }, [refill]);
 
+  // Fetch the next batch well before the deck runs out, so a fast swiper
+  // never waits on the server.
   useEffect(() => {
-    if (!loading && queue.length < 5) refill();
+    if (!loading && queue.length < 8) refill();
   }, [queue.length, loading, refill]);
+
+  // Load the next few posters in advance, so the card under the one you're
+  // swiping is already drawn when it comes up.
+  useEffect(() => {
+    for (const c of queue.slice(1, 4)) {
+      if (c.poster) new Image().src = c.poster;
+    }
+  }, [queue]);
 
   // `from` is the drag vector when swiped; buttons fly the card towards the
   // target they stand for.
@@ -81,6 +91,8 @@ export function SwipeDeck({ genre, filters = {} }: { genre: number; filters?: De
         v = a.kind === "unseen" ? { x: 0, y: 1 } : vectorFor(STAR_BEARINGS[a.stars]);
       }
       setFlying({ answer: a, x: v.x * FLY, y: v.y * FLY });
+      // A tiny tap of feedback (Android; iPhones ignore it).
+      navigator.vibrate?.(15);
       setTimeout(() => {
         setQueue((q) => q.slice(1));
         setHistory((h) => [{ card, answer: a }, ...h].slice(0, 30));

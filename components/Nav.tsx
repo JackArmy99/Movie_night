@@ -5,7 +5,7 @@ import { USER_COOKIE } from "@/lib/token";
 import { BackLink } from "./BackLink";
 
 const TABS = [
-  { href: "/swipe", label: "Swipe", icon: "🃏" },
+  { href: "/swipe/0", label: "Swipe", icon: "🃏" },
   { href: "/search", label: "Search", icon: "🔍" },
   { href: "/tonight", label: "Tonight", icon: "🍿" },
   { href: "/watchlist", label: "Watchlist", icon: "📌" },
@@ -17,6 +17,12 @@ const TABS = [
 export async function Nav({ active }: { active?: string }) {
   const userId = cookies().get(USER_COOKIE)?.value;
   const toDecide = userId ? await pileCount(userId).catch(() => 0) : 0;
+  return <NavBar active={active} toDecide={toDecide} />;
+}
+
+// The bar itself, with no database work: loading screens use it directly so
+// they appear instantly.
+export function NavBar({ active, toDecide = 0 }: { active?: string; toDecide?: number }) {
   return (
     <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-line bg-ink/95 backdrop-blur pb-[env(safe-area-inset-bottom)]">
       <div className="mx-auto flex max-w-xl justify-around">

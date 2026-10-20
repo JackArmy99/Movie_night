@@ -1,5 +1,6 @@
 // Films opening in Dutch cinemas over the next four months, with their exact
-// Dutch date. Rebuilt at most every 12 hours (about 100 TMDB lookups).
+// Dutch date. Rebuilt nightly by the daily job (about 100 TMDB lookups), and
+// on a visit only if that hasn't happened for 12 hours.
 import type { Movie } from "@prisma/client";
 import { db } from "./db";
 import { ensureDetails, saveList } from "./movies";
@@ -10,11 +11,11 @@ import { scoreCandidates, SEEN, Seed, Verdict } from "./score";
 const TTL = 12 * 60 * 60 * 1000;
 const DAYS_AHEAD = 120;
 
-export async function upcomingDutch(): Promise<Movie[]> {
+export async function upcomingDutch(opts: { force?: boolean } = {}): Promise<Movie[]> {
   const today = new Date().toISOString().slice(0, 10);
   const cache = await getJson<{ at: number; ids: number[] } | null>("calendar_cache", null);
   let ids = cache?.ids ?? [];
-  if (hasTmdb() && (!cache || Date.now() - cache.at > TTL)) {
+  if (hasTmdb() && (opts.force || !cache || Date.now() - cache.at > TTL)) {
     const to = new Date(Date.now() + DAYS_AHEAD * 864e5).toISOString().slice(0, 10);
     const found: number[] = [];
     for (let page = 1; page <= 5; page++) {

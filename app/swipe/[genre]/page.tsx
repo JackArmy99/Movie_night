@@ -4,7 +4,9 @@ import { genreName } from "@/lib/genres";
 import { parseLike } from "@/lib/similar";
 import { Header, Nav } from "@/components/Nav";
 import { SwipeDeck } from "@/components/SwipeDeck";
-import { DeckFilters } from "@/components/DeckFilters";
+import { ControlBar } from "@/components/ControlBar";
+import { GenreChoices } from "@/components/GenreChoices";
+import { SEEN } from "@/lib/score";
 import { FilterBar } from "@/components/FilterBar";
 import { SimilarPicker } from "@/components/SimilarPicker";
 
@@ -18,13 +20,21 @@ const num = (v: string | string[] | undefined) => {
 };
 
 export default async function Deck({ params, searchParams }: { params: { genre: string }; searchParams: SP }) {
-  await me();
+  const user = await me();
   const genre = Number(params.genre) || 0;
   const filters = { imdb: num(searchParams.imdb), rt: num(searchParams.rt), from: num(searchParams.from), like: parseLike(searchParams.like) };
-  const [liked, rtKnown] = await Promise.all([
+  const [liked, rtKnown, mySwipes] = await Promise.all([
     db.movie.findMany({ where: { id: { in: filters.like } }, select: { id: true, title: true } }),
     db.movie.count({ where: { rtScore: { not: null } } }),
+    db.swipe.findMany({ where: { userId: user.id }, select: { verdict: true, movie: { select: { genreIds: true } } } }),
   ]);
+  // How many films you've marked as seen, per genre (shown in the genre panel).
+  const counts: Record<number, number> = {};
+  for (const s of mySwipes) {
+    if (!SEEN.has(s.verdict)) continue;
+    counts[0] = (counts[0] ?? 0) + 1;
+    for (const g of s.movie.genreIds) counts[g] = (counts[g] ?? 0) + 1;
+  }
   const chosen = filters.like.map((id) => liked.find((m) => m.id === id)).filter((m) => m !== undefined);
   const summary = [
     ...chosen.map((c) => `Like ${c.title}`),
@@ -34,14 +44,22 @@ export default async function Deck({ params, searchParams }: { params: { genre: 
   ];
   return (
     <main className="pb-tabs">
-      <Header title={genreName(genre)} back="/swipe" />
-      <DeckFilters summary={summary}>
-        <SimilarPicker chosen={chosen} />
-        <FilterBar deck rtAvailable={rtKnown > 0} />
-      </DeckFilters>
+      <Header title="Swipe" />
+      <ControlBar
+        genreLabel={genre ? genreName(genre) : "🎞️ Any genre"}
+        genreActive={genre !== 0}
+        genrePanel={<GenreChoices mode="deck" counts={counts} />}
+        summary={summary}
+        filtersPanel={
+          <>
+            <SimilarPicker chosen={chosen} />
+            <FilterBar deck rtAvailable={rtKnown > 0} />
+          </>
+        }
+      />
       {/* A new filter restarts the deck. */}
       <SwipeDeck key={JSON.stringify(filters)} genre={genre} filters={filters} />
-      <Nav active="/swipe" />
+      <Nav active="/swipe/0" />
     </main>
   );
 }

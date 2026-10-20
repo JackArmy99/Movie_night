@@ -4,7 +4,7 @@ import type { Movie, Prisma } from "@prisma/client";
 import { db } from "./db";
 import { pmap } from "./pmap";
 import * as tmdb from "./tmdb";
-import { hasOmdb, omdbRatings } from "./omdb";
+import { hasOmdb, omdbBatch } from "./omdb";
 
 const DAY = 24 * 60 * 60 * 1000;
 const PROVIDERS_TTL = 7 * DAY; // what's on Netflix changes weekly
@@ -35,6 +35,12 @@ export async function saveList(items: tmdb.TmdbListItem[]): Promise<void> {
   await db.movie.createMany({ data: items.map(fromList), skipDuplicates: true });
 }
 
+// Writes for a batch go to the database together: one round trip instead of
+// one per film (each trip is slow when the server and database are far apart).
+async function writeAll(updates: Prisma.PrismaPromise<unknown>[]) {
+  if (updates.length) await db.$transaction(updates);
+}
+
 // Runtime, IMDb id, Dutch providers and Dutch cinema date.
 export async function ensureDetails(ids: number[]): Promise<void> {
   if (!tmdb.hasTmdb() || !ids.length) return;
@@ -46,29 +52,35 @@ export async function ensureDetails(ids: number[]): Promise<void> {
   const stale = rows.filter(
     (r) => older(r.detailsAt, RATINGS_TTL) || older(r.providersAt, PROVIDERS_TTL) || !r.trailerAt,
   );
-  await pmap(stale, 8, async ({ id }) => {
-    const d = await tmdb.details(id);
-    const base = fromList(d);
-    await db.movie.update({
-      where: { id },
-      data: {
-        title: base.title,
-        year: base.year,
-        releaseDate: base.releaseDate,
-        overview: base.overview,
-        posterPath: base.posterPath,
-        genreIds: base.genreIds,
-        runtime: d.runtime ?? null,
-        imdbId: d.imdb_id ?? null,
-        providers: d.providers as unknown as Prisma.InputJsonValue,
-        nlRelease: d.nlRelease,
-        trailerKey: d.trailerKey,
-        trailerAt: new Date(),
-        detailsAt: new Date(),
-        providersAt: new Date(),
-      },
-    });
-  });
+  const found = await pmap(stale, 8, ({ id }) => tmdb.details(id));
+  const now = new Date();
+  await writeAll(
+    found.flatMap((d) => {
+      if (!d) return [];
+      const base = fromList(d);
+      return [
+        db.movie.update({
+          where: { id: d.id },
+          data: {
+            title: base.title,
+            year: base.year,
+            releaseDate: base.releaseDate,
+            overview: base.overview,
+            posterPath: base.posterPath,
+            genreIds: base.genreIds,
+            runtime: d.runtime ?? null,
+            imdbId: d.imdb_id ?? null,
+            providers: d.providers as unknown as Prisma.InputJsonValue,
+            nlRelease: d.nlRelease,
+            trailerKey: d.trailerKey,
+            trailerAt: now,
+            detailsAt: now,
+            providersAt: now,
+          },
+        }),
+      ];
+    }),
+  );
 }
 
 // IMDb / Rotten Tomatoes / Metacritic. Needs details first (for the IMDb id).
@@ -79,18 +91,26 @@ export async function ensureRatings(ids: number[]): Promise<void> {
     select: { id: true, imdbId: true, ratingsAt: true, imdbAt: true },
   });
   const stale = rows.filter((r) => older(r.ratingsAt, RATINGS_TTL));
-  await pmap(stale, 6, async ({ id, imdbId, imdbAt }) => {
-    const r = await omdbRatings(imdbId!);
-    if (!r) return;
-    // IMDb's own daily file is the better IMDb source; OMDb only fills in
-    // films it hasn't covered yet.
-    const { imdbRating, imdbVotes, ...rest } = r;
-    const fromFile = imdbAt && Date.now() - imdbAt.getTime() < 3 * DAY;
-    await db.movie.update({
-      where: { id },
-      data: { ...rest, ...(fromFile ? {} : { imdbRating, imdbVotes }), ratingsAt: new Date() },
-    });
-  });
+  const results = await omdbBatch(stale.map((r) => r.imdbId!));
+  const now = new Date();
+  await writeAll(
+    stale.flatMap(({ id, imdbId, imdbAt }) => {
+      const r = results.get(imdbId!);
+      if (!r) return []; // not looked up this time (no key / limit): try again later
+      // OMDb has no entry: remember that, so it isn't asked again for a month.
+      if (r === "missing") return [db.movie.update({ where: { id }, data: { ratingsAt: now } })];
+      // IMDb's own daily file is the better IMDb source; OMDb only fills in
+      // films it hasn't covered yet.
+      const { imdbRating, imdbVotes, ...rest } = r;
+      const fromFile = imdbAt && Date.now() - imdbAt.getTime() < 3 * DAY;
+      return [
+        db.movie.update({
+          where: { id },
+          data: { ...rest, ...(fromFile ? {} : { imdbRating, imdbVotes }), ratingsAt: now },
+        }),
+      ];
+    }),
+  );
 }
 
 // "People who liked X also liked…" lists for the films you rated.
@@ -101,14 +121,13 @@ export async function ensureRecs(ids: number[]): Promise<void> {
     select: { id: true, recsAt: true },
   });
   const stale = rows.filter((r) => older(r.recsAt, RECS_TTL));
-  await pmap(stale, 8, async ({ id }) => {
-    const recs = await tmdb.recommendations(id);
-    await saveList(recs);
-    await db.movie.update({
-      where: { id },
-      data: { recIds: recs.map((r) => r.id), recsAt: new Date() },
-    });
-  });
+  const lists = await pmap(stale, 8, async ({ id }) => ({ id, recs: await tmdb.recommendations(id) }));
+  const done = lists.filter((l) => l !== undefined);
+  await saveList(done.flatMap((l) => l.recs));
+  const now = new Date();
+  await writeAll(
+    done.map((l) => db.movie.update({ where: { id: l.id }, data: { recIds: l.recs.map((r) => r.id), recsAt: now } })),
+  );
 }
 
 export async function ensureMovie(id: number): Promise<Movie | null> {

@@ -437,6 +437,42 @@ async function main() {
     assert.deepEqual(dv, [...dv].sort((x, y) => y - x), "most-watched first among direct matches");
   });
 
+  await test("Counters stay exact under parallel use; OMDb stops at the daily limit", async () => {
+    const { incrementSetting, getSetting } = await import("../lib/settings");
+    await Promise.all(Array.from({ length: 20 }, () => incrementSetting("count:test", 1)));
+    assert.equal(await getSetting("count:test"), "20", "lost increments");
+    const { omdbBatch } = await import("../lib/omdb");
+    const day = `omdb:${new Date().toISOString().slice(0, 10)}`;
+    const limit = Number(process.env.OMDB_DAILY_LIMIT ?? 950);
+    await db.setting.upsert({ where: { key: day }, create: { key: day, value: String(limit - 3) }, update: { value: String(limit - 3) } });
+    const ids = Array.from({ length: 10 }, (_, i) => `tt${String(1100 + i).padStart(7, "0")}`);
+    const res = await omdbBatch(ids);
+    assert.equal(res.size, 3, `looked up ${res.size} films with 3 left today`);
+    await db.setting.delete({ where: { key: day } });
+  });
+
+  await test("OMDb 'no such film' is remembered, not asked again every visit", async () => {
+    const { ensureRatings } = await import("../lib/movies");
+    const m = await db.movie.create({ data: { id: 999001, title: "Unknown to OMDb", imdbId: "tt9999999" } });
+    const before = fake.calls.filter((c) => c.startsWith("/omdb")).length;
+    await ensureRatings([m.id]);
+    await ensureRatings([m.id]);
+    assert.equal(fake.calls.filter((c) => c.startsWith("/omdb")).length - before, 1, "asked OMDb twice");
+    assert.ok((await db.movie.findUnique({ where: { id: m.id } }))!.ratingsAt, "miss not recorded");
+  });
+
+  await test("Daily job: needs the secret; refreshes IMDb ratings and the calendar", async () => {
+    const { GET } = await import("../app/api/cron/daily/route");
+    const { NextRequest } = await import("next/server");
+    process.env.CRON_SECRET = "s3cret";
+    const denied = await GET(new NextRequest("http://x/api/cron/daily"));
+    assert.equal(denied.status, 404);
+    const ok = await GET(new NextRequest("http://x/api/cron/daily", { headers: { authorization: "Bearer s3cret" } }));
+    const body = (await ok.json()) as { imdb: { matched: number }; calendar: number };
+    assert.ok(body.imdb.matched > 0, JSON.stringify(body));
+    assert.equal(body.calendar, 10);
+  });
+
   fake.close();
   await db.$disconnect();
 }

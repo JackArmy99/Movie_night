@@ -49,7 +49,7 @@ export default async function Home() {
       </section>
 
       {mine.seen < 50 && (
-        <Link href="/swipe" className="card block border-accent/60 p-4">
+        <Link href="/swipe/0" className="card block border-accent/60 p-4">
           <div className="font-semibold">Start here: swipe through films 🃏</div>
           <p className="mt-1 text-sm text-gray-400">
             The more you've marked, the fewer suggestions you've already seen. A few hundred swipes takes about 20
@@ -64,7 +64,7 @@ export default async function Home() {
         <Tile href="/rank" icon="⚖️" title="This or that" sub={`Rank your ${mine.loved} favourites`} />
         <Tile href="/watchlist" icon="📌" title="Watchlist" sub={`${watchlist.length} films`} />
         <Tile href="/calendar" icon="📅" title="In cinemas" sub="Dutch release dates" />
-        <Tile href="/swipe" icon="🃏" title="Swipe" sub="Mark what you've seen" />
+        <Tile href="/swipe/0" icon="🃏" title="Swipe" sub="Mark what you've seen" />
       </section>
       <Nav />
     </main>
