@@ -5,12 +5,15 @@ import { ensureDetails, ensureRatings, ensureRecs, providersOf, saveList } from 
 import { getMyServices } from "./settings";
 import { hasTmdb, topRated } from "./tmdb";
 import { similarPool } from "./similar";
-import { Filters, MIN_VOTES, PASS, passes, passesCheap, reputationFactor, scoreCandidates, excludedBy, NO_EXCLUDED, type Excluded, SEEN, Seed, Verdict } from "./score";
+import { aiCandidates } from "./ai";
+import { Filters, MIN_VOTES, PASS, positionFactor, passes, passesCheap, reputationFactor, scoreCandidates, excludedBy, NO_EXCLUDED, type Excluded, SEEN, Seed, Verdict } from "./score";
 
 // Fresh TMDB lookups allowed per page load. Each one is two quick calls; the
 // rest arrive on the next visit (lists are cached for two months).
 const RECS_PER_LOAD = 25;
 const CHECK_LIMIT = 80;
+// Claude's picks only need this many TMDB votes (to be sure of the match).
+const AI_MIN_VOTES = 20;
 // How many of the best taste matches get IMDb/RT lookups before ranking.
 const RERANK = 40;
 
@@ -20,6 +23,7 @@ export type Suggestion = {
   because: { id: number; title: string }[];
   fallback: boolean; // came from "top rated", not from your taste
   onWatchlist: boolean;
+  reason?: string; // Claude's one-liner, when Claude proposed it
 };
 
 export async function suggest(opts: {
@@ -30,6 +34,9 @@ export async function suggest(opts: {
   extraGenres?: number[]; // Tonight mode: any of these
   like?: number[]; // "Similar to…": only films like these, taste breaks ties
   exclude?: Excluded; // "Custom" genres: unticked genres / superhero never shown
+  mood?: string; // Tonight's mood key, passed on to Claude as a hint
+  fresh?: boolean; // ask Claude for new picks instead of today's cached ones
+  ai?: boolean; // false = taste engine only (default: use Claude when available)
 }): Promise<Suggestion[]> {
   const limit = opts.limit ?? 20;
   const genres = opts.extraGenres?.length ? opts.extraGenres : opts.genre ? [opts.genre] : [];
@@ -80,42 +87,80 @@ export async function suggest(opts: {
     genre: genres.length === 1 ? genres[0] : 0,
   });
 
-  // What to rank: films your taste points at — or, with "Similar to…", films
-  // like the chosen ones, where your taste only breaks ties.
+  // What to rank. Claude proposes films (when available: key set, under the
+  // monthly cap); TMDB's lists add more. Without "Similar to…", Claude's picks
+  // and your taste are blended; with it, closeness to the chosen films leads
+  // and your taste only breaks ties. Anything seen or passed is dropped here,
+  // whatever Claude said.
   const like = opts.like ?? [];
-  type Base = { id: number; taste: number; because: number[] };
+  const ai =
+    opts.ai === false
+      ? null
+      : await aiCandidates(
+          like.length
+            ? { mode: "similar", anchors: like, users: opts.users, fresh: opts.fresh }
+            : { mode: "tonight", users: opts.users, mood: opts.mood, genres, exclude: opts.exclude, fresh: opts.fresh },
+        );
+  const aiPicks = (ai ?? []).filter((p) => !excluded.has(p.id) && !like.includes(p.id));
+  const aiRank = new Map(aiPicks.map((p, i) => [p.id, positionFactor(i)]));
+  const aiWhy = new Map(aiPicks.map((p) => [p.id, p.why]));
+  const tasteOf = new Map(scored.map((s) => [s.movieId, s.score]));
+  const maxTaste = Math.max(1e-9, ...scored.map((s) => s.score));
+  const tasteNorm = (id: number) => Math.min(1, Math.max(0, (tasteOf.get(id) ?? 0) / maxTaste));
+
+  type Base = { id: number; taste: number; because: number[]; ai: boolean };
   let base: Base[];
   if (like.length) {
-    const closeness = await similarPool(like, { minSize: limit * 4, excluded });
-    const tasteOf = new Map(scored.map((s) => [s.movieId, s.score]));
-    const maxTaste = Math.max(1e-9, ...scored.map((s) => s.score));
-    base = [...closeness].map(([id, c]) => ({
-      id,
-      taste: c * (1 + 0.5 * Math.min(1, Math.max(0, (tasteOf.get(id) ?? 0) / maxTaste))),
-      because: like,
-    }));
-    for (const r of await db.movie.findMany({ where: { id: { in: like } }, select: { id: true, title: true } })) {
-      titles.set(r.id, r.title);
+    let closeness = await similarPool(like, { minSize: limit * 4, excluded });
+    const anchors = await db.movie.findMany({ where: { id: { in: like } }, select: { id: true, title: true, genreIds: true } });
+    for (const r of anchors) titles.set(r.id, r.title);
+    if (!ai) {
+      // Without Claude, a TMDB "also watched" film must at least share a genre
+      // with one of the chosen films (no Bourne Ultimatum for Arrival).
+      const anchorGenres = new Set(anchors.flatMap((a) => a.genreIds));
+      const rows = await db.movie.findMany({ where: { id: { in: [...closeness.keys()] } }, select: { id: true, genreIds: true } });
+      const ok = new Set(rows.filter((r) => r.genreIds.some((g) => anchorGenres.has(g))).map((r) => r.id));
+      closeness = Object.assign(new Map([...closeness].filter(([id]) => ok.has(id))), { direct: closeness.direct });
     }
+    const maxClose = Math.max(1e-9, ...closeness.values());
+    const ids = new Set([...aiRank.keys(), ...closeness.keys()]);
+    base = [...ids].map((id) => ({
+      id,
+      taste: (0.75 * (aiRank.get(id) ?? 0) + 0.25 * ((closeness.get(id) ?? 0) / maxClose)) * (1 + 0.5 * tasteNorm(id)),
+      because: like,
+      ai: aiRank.has(id),
+    }));
+  } else if (aiPicks.length) {
+    const ids = new Set([...aiRank.keys(), ...tasteOf.keys()]);
+    const becauseOf = new Map(scored.map((s) => [s.movieId, s.because]));
+    base = [...ids].map((id) => ({
+      id,
+      taste: 0.6 * (aiRank.get(id) ?? 0) + 0.4 * tasteNorm(id),
+      because: becauseOf.get(id) ?? [],
+      ai: aiRank.has(id),
+    }));
   } else {
-    base = scored.map((s) => ({ id: s.movieId, taste: s.score, because: s.because }));
+    base = scored.map((s) => ({ id: s.movieId, taste: s.score, because: s.because, ai: false }));
   }
 
   const candidateRows = await db.movie.findMany({ where: { id: { in: base.map((b) => b.id) } } });
   const byId = new Map(candidateRows.map((m) => [m.id, m]));
 
-  type Cand = { movie: Movie; score: number; taste: number; because: number[]; fallback: boolean };
+  type Cand = { movie: Movie; score: number; taste: number; because: number[]; fallback: boolean; ai?: boolean };
   let pool: Cand[] = base
     .map((b) => ({ ...b, movie: byId.get(b.id)! }))
     .filter((c) => c.movie && inGenre(c.movie.genreIds) && !excludedBy(c.movie, ex) && passesCheap(c.movie, opts.filters))
     // Obscure films with a handful of votes are mostly noise in TMDB's lists.
-    .filter((c) => c.movie.voteCount >= MIN_VOTES)
+    // Claude's picks are deliberate, so they only need enough votes to be sure
+    // the title was matched to the right film.
+    .filter((c) => c.movie.voteCount >= (c.ai ? AI_MIN_VOTES : MIN_VOTES))
     .map((c) => ({
       movie: c.movie,
       taste: c.taste,
       score: c.taste * reputationFactor(c.movie),
       because: c.because,
       fallback: false,
+      ai: c.ai,
     }))
     .sort((a, b) => b.score - a.score);
 
@@ -188,5 +233,6 @@ export async function suggest(opts: {
     fallback: c.fallback,
     onWatchlist: watch.has(c.movie.id),
     because: c.because.slice(0, 2).map((id) => ({ id, title: titles.get(id) ?? "" })),
+    reason: aiWhy.get(c.movie.id),
   }));
 }

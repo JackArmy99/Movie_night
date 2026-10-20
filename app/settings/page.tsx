@@ -110,8 +110,8 @@ export default async function Settings({ searchParams }: { searchParams: { saved
         <ImdbNowButton />
         <Row
           ok={hasClaude()}
-          label={`Claude explanations (${MODEL})`}
-          note={hasClaude() ? `$${spent.toFixed(3)} of $${monthlyCap()} this month` : "optional"}
+          label={`Claude picks & "why" lines (${MODEL})`}
+          note={hasClaude() ? `$${spent.toFixed(3)} of $${monthlyCap()} this month` : "not set up"}
         />
       </section>
 

@@ -31,7 +31,7 @@ Films the two of you will **both** like — and never one you've already seen.
    | `TMDB_TOKEN` | TMDB → Settings → API → **API Read Access Token** |
    | `OMDB_KEY` | the key OMDb emailed you |
    | `CRON_SECRET` | any random text; protects the daily IMDb ratings update |
-   | `ANTHROPIC_API_KEY` | optional — Claude's "why you'd like it" (about 1p a click, capped at $3/month) |
+   | `ANTHROPIC_API_KEY` | Claude picks the films for Tonight and "Similar to" (about 0.1p per fresh list, capped at $1/month; without it the app uses TMDB's lists only) |
 
 4. **Deployments → ⋯ → Redeploy.** Open the address Vercel shows
    (`something.vercel.app`) on your phone → type the passcode → enter both names.

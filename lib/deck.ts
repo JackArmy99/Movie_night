@@ -5,6 +5,7 @@ import { db } from "./db";
 import { ensureDetails, ensureRatings, saveList } from "./movies";
 import { MIN_VOTES, passes, passesCheap, excludedBy, hasExcluded, NO_EXCLUDED, type Excluded } from "./score";
 import { similarPool } from "./similar";
+import { aiCandidates } from "./ai";
 import { getJson, setJson } from "./settings";
 import * as tmdb from "./tmdb";
 
@@ -64,15 +65,20 @@ export async function deckCards(
     const answered = new Set(
       (await db.swipe.findMany({ where: { userId: user.id }, select: { movieId: true } })).map((s) => s.movieId),
     );
+    // Claude's picks (when available) are the closest matches; TMDB's lists
+    // follow. Tiers: Claude, then TMDB direct, then TMDB's wider second hop.
+    const ai = (await aiCandidates({ mode: "similar", anchors: like, users: [user.id] })) ?? [];
+    const aiIds = new Set(ai.map((p) => p.id).filter((id) => !answered.has(id) && !like.includes(id)));
     const pool = await similarPool(like, { minSize: 60, excluded: answered });
-    const rows = await db.movie.findMany({ where: { id: { in: [...pool.keys()] } } });
+    const rows = await db.movie.findMany({ where: { id: { in: [...new Set([...aiIds, ...pool.keys()])] } } });
+    const tier = (id: number) => (aiIds.has(id) ? 0 : pool.direct.has(id) ? 1 : 2);
     const ordered = rows
       .filter((m) => !skipSet.has(m.id) && (!genre || m.genreIds.includes(genre)) && passesCheap(m, { yearFrom: f.from }))
-      // As in Tonight: a handful of votes makes any score meaningless.
-      .filter((m) => m.voteCount >= MIN_VOTES)
-      // Films the anchors list directly first, then the wider second hop;
-      // most-watched first within each.
-      .sort((a, b) => Number(pool.direct.has(b.id)) - Number(pool.direct.has(a.id)) || b.voteCount - a.voteCount);
+      // As in Tonight: a handful of votes makes any score meaningless (Claude's
+      // picks only need enough to be sure the title matched the right film).
+      .filter((m) => m.voteCount >= (aiIds.has(m.id) ? 20 : MIN_VOTES))
+      // Most-watched first within each tier: those you're likeliest to have seen.
+      .sort((a, b) => tier(a.id) - tier(b.id) || b.voteCount - a.voteCount);
     const cards: Card[] = [];
     for (let i = 0; i < ordered.length && cards.length < 10; i += 12) {
       const chunk = ordered.slice(i, i + 12);

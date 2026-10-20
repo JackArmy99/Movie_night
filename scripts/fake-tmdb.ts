@@ -74,6 +74,9 @@ export const keywordsOf = (id: number) => (id % 10 === 0 ? [9715, 9717] : [1234]
 // The IMDb rating the fake daily file gives a film (OMDb's differs on purpose).
 export const imdbOf = (id: number) => (6 + (id % 30) / 10).toFixed(1);
 
+// The last request the fake Claude received (tests check what was sent).
+export const lastClaudeRequest = { body: "" };
+
 export function startFake(port = 0): Promise<{ url: string; close: () => void; calls: string[] }> {
   const calls: string[] = [];
   const server = http.createServer((req, res) => {
@@ -83,6 +86,32 @@ export function startFake(port = 0): Promise<{ url: string; close: () => void; c
       res.writeHead(status, { "content-type": "application/json" });
       res.end(JSON.stringify(body));
     };
+    // A stand-in for Claude (point ANTHROPIC_BASE_URL here). It answers any
+    // request for film picks with a fixed list: 40 real fake-films, one the
+    // test profile has already seen ("Film 1000") and one title TMDB won't know.
+    if (req.method === "POST" && url.pathname === "/v1/messages") {
+      let body = "";
+      req.on("data", (c) => (body += c));
+      req.on("end", () => {
+        lastClaudeRequest.body = body;
+        const films = [
+          { title: "Film 1000", year: 1970, why: "already seen — must be filtered out" },
+          { title: "Not A Real Film", year: 2001, why: "unknown to TMDB — must be dropped" },
+          ...FILMS.slice(400, 440).map((f) => ({ title: f.title, year: Number(f.release_date.slice(0, 4)), why: `fake reason for ${f.title}` })),
+        ];
+        json({
+          id: "msg_fake",
+          type: "message",
+          role: "assistant",
+          model: "claude-haiku-5-5",
+          content: [{ type: "text", text: JSON.stringify({ films }) }],
+          stop_reason: "end_turn",
+          stop_sequence: null,
+          usage: { input_tokens: 5000, output_tokens: 2500 },
+        });
+      });
+      return;
+    }
     const p = Number(url.searchParams.get("page") ?? 1);
     const path = url.pathname.replace(/^\/3/, "");
 

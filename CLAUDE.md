@@ -42,6 +42,17 @@ Claude (`lib/claude.ts`, Haiku 5.5 default, monthly cap).
   page that forgets to pass it slips through them (happened 20 Oct).
 - Server actions live in `app/actions/<area>.ts`; `app/actions/index.ts`
   re-exports them, so components import from `@/app/actions`.
+- **Claude proposes films** (`lib/ai.ts` `aiCandidates`, Haiku 5.5, ~0.1p a call,
+  `CLAUDE_MONTHLY_CAP_USD` default $1, spend counted atomically in
+  `claude_micro:<month>`). It's sent the anchors (Similar to) or both people's
+  5★/4½★ films + dislikes + mood/genre hints (Tonight), plus up to 400 seen/passed
+  titles to avoid. Titles → TMDB via `search()`. Cached: similar 30 days, Tonight per
+  day + choice (`↻ Fresh picks` = `?fresh=1`, dropped from the URL after use).
+  `suggest()` blends: Tonight 0.6 Claude rank + 0.4 taste; Similar 0.75 Claude +
+  0.25 TMDB closeness; then IMDb/RT. **Seen/passed films are removed after Claude
+  answers**; never trust its list for that. No key / over cap / error → the TMDB
+  engine (Similar then requires a shared genre with an anchor). Tests use a fake
+  `/v1/messages` in `scripts/fake-tmdb.ts` via `ANTHROPIC_BASE_URL`.
 - "Similar to…" (`?like=id,id`, max 5; `components/SimilarPicker.tsx`) works in
   Tonight and the swipe deck. `similarPool()` (`lib/similar.ts`) blends the
   anchors' TMDB "also liked" lists (`blendCloseness`, 1.5× for films shared by

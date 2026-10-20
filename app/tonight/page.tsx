@@ -19,6 +19,7 @@ import { ServicePicker } from "@/components/ServicePicker";
 import { SimilarPicker } from "@/components/SimilarPicker";
 import { parseLike } from "@/lib/similar";
 import { WhyButton } from "@/components/WhyButton";
+import { DropParam } from "@/components/DropParam";
 
 const ANY_GENRE = "🎞️ Any genre";
 
@@ -126,7 +127,7 @@ async function Picks({ sp }: { sp: SP }) {
     return db.movie.findMany({ where: { id: { in: ids } } });
   };
   const [picks, saved] = await Promise.all([
-    suggest({ users, genre: 0, extraGenres: genres, filters, limit, like, exclude }),
+    suggest({ users, genre: 0, extraGenres: genres, filters, limit, like, exclude, mood: sp.mood, fresh: sp.fresh === "1" }),
     watchlistFilms(),
   ]);
   const picked = new Set(picks.map((p) => p.movie.id));
@@ -137,13 +138,22 @@ async function Picks({ sp }: { sp: SP }) {
     .filter((m) => passes({ ...m, streamIds: (providersOf(m)?.stream ?? []).map((p) => p.id) }, filters, mine))
     .slice(0, 3);
 
-  const unexplained = picks.filter((s) => !s.movie.why && !s.fallback).slice(0, 10);
+  const unexplained = picks.filter((s) => !s.movie.why && !s.reason && !s.fallback).slice(0, 10);
+  const fromClaude = picks.some((s) => s.reason);
   return (
     <div className="space-y-5">
       <section className="space-y-3">
-        <h2 className="font-semibold">
-          {like.length ? "Films like these" : users.length > 1 ? "Top picks for the two of you" : "Top picks for you"}
-        </h2>
+        <div className="flex items-center justify-between gap-2">
+          <h2 className="font-semibold">
+            {like.length ? "Films like these" : users.length > 1 ? "Top picks for the two of you" : "Top picks for you"}
+          </h2>
+          {fromClaude && (
+            <Link href={href(sp, { fresh: "1", n: undefined })} scroll={false} className="shrink-0 text-xs text-accent">
+              ↻ Fresh picks
+            </Link>
+          )}
+        </div>
+        {sp.fresh === "1" && <DropParam name="fresh" />}
         {hasClaude() && unexplained.length > 0 && (
           <WhyButton
             ids={unexplained.map((s) => s.movie.id)}
@@ -157,7 +167,7 @@ async function Picks({ sp }: { sp: SP }) {
               m={s.movie}
               mine={mine}
               because={s.because}
-              why={s.movie.why}
+              why={s.movie.why ?? s.reason}
               onWatchlist={s.onWatchlist}
               becausePrefix={like.length ? "Like" : "Because of"}
               note={s.fallback ? "Highly rated — rate more films for personal picks" : undefined}

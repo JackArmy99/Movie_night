@@ -25,7 +25,7 @@ import { directionFor, starsFromX } from "../lib/swipe";
 import { pickTrailer } from "../lib/tmdb";
 import { parseRatingLine } from "../lib/imdb";
 import { toIcs } from "../lib/ics";
-import { startFake, FILMS, recsFor, imdbOf, keywordsOf } from "./fake-tmdb";
+import { startFake, FILMS, recsFor, imdbOf, keywordsOf, lastClaudeRequest } from "./fake-tmdb";
 
 let failures = 0;
 async function test(name: string, fn: () => void | Promise<void>) {
@@ -527,6 +527,57 @@ async function main() {
     const body = (await ok.json()) as { imdb: { matched: number }; calendar: number };
     assert.ok(body.imdb.matched > 0, JSON.stringify(body));
     assert.equal(body.calendar, 10);
+  });
+
+  await test("Similar to without Claude: TMDB films must share a genre with the chosen film", async () => {
+    const anchor = FILMS.find((f) => f.id === 1003)!;
+    const list = await suggest({ users: [a.id, b.id], genre: 0, filters: {}, like: [1003], limit: 15 });
+    assert.ok(list.length > 0);
+    for (const s of list) assert.ok(s.movie.genreIds.some((g) => anchor.genre_ids.includes(g)), `${s.movie.title} shares no genre`);
+    assert.ok(list.every((s) => !s.reason), "no Claude reasons without a key");
+  });
+
+  await test("Claude picks: titles matched, cached, cost counted; seen films never shown", async () => {
+    Object.assign(process.env, { ANTHROPIC_API_KEY: "test-key", ANTHROPIC_BASE_URL: fake.url, CLAUDE_MONTHLY_CAP_USD: "1" });
+    const { aiCandidates } = await import("../lib/ai");
+    const { spentThisMonth } = await import("../lib/claude");
+    const claudeCalls = () => fake.calls.filter((c) => c === "/v1/messages").length;
+    const spendBefore = await spentThisMonth();
+    const picks = (await aiCandidates({ mode: "similar", anchors: [1003], users: [a.id, b.id] }))!;
+    assert.ok(picks, "no picks");
+    const ids = picks.map((p) => p.id);
+    assert.ok(ids.includes(1400) && ids.includes(1439), "titles not matched to TMDB");
+    assert.equal(picks.length, 41, "the unknown title should be dropped, the rest kept");
+    assert.ok(lastClaudeRequest.body.includes("Already seen") && lastClaudeRequest.body.includes("Film 1000"), "seen list not sent");
+    assert.equal(claudeCalls(), 1);
+    await aiCandidates({ mode: "similar", anchors: [1003], users: [a.id, b.id] });
+    assert.equal(claudeCalls(), 1, "second identical request should come from the cache");
+    const cost = (await spentThisMonth()) - spendBefore;
+    assert.ok(cost > 0.0015 && cost < 0.002, `cost recorded ${cost}`);
+
+    const similar = await suggest({ users: [a.id, b.id], genre: 0, filters: {}, like: [1003], limit: 10 });
+    assert.ok(similar.length > 0);
+    assert.ok(similar[0].reason?.startsWith("fake reason"), "Claude's picks should lead in Similar to");
+    assert.ok(!similar.some((s) => s.movie.id === 1000), "a seen film got through from Claude");
+
+    const tonight = await suggest({ users: [a.id, b.id], genre: 0, filters: {}, limit: 10 });
+    assert.ok(tonight.some((s) => s.reason), "Tonight should include Claude's picks");
+    assert.ok(!tonight.some((s) => s.movie.id === 1000), "a seen film got through in Tonight");
+    const seen = new Set((await db.swipe.findMany({ where: { verdict: { in: ["superlike", "like", "dislike", "seen", "pass"] } } })).map((x) => x.movieId));
+    for (const s of [...similar, ...tonight]) assert.ok(!seen.has(s.movie.id), `${s.movie.title} was seen or passed`);
+  });
+
+  await test("Claude past the monthly cap (or with no key): no call, old engine answers", async () => {
+    const { aiCandidates } = await import("../lib/ai");
+    const before = fake.calls.filter((c) => c === "/v1/messages").length;
+    process.env.CLAUDE_MONTHLY_CAP_USD = "0.000001";
+    assert.equal(await aiCandidates({ mode: "similar", anchors: [1011], users: [a.id] }), null);
+    const list = await suggest({ users: [a.id, b.id], genre: 0, filters: {}, like: [1011], limit: 5 });
+    assert.ok(list.length > 0 && list.every((s) => !s.reason), "should fall back to the TMDB engine");
+    process.env.CLAUDE_MONTHLY_CAP_USD = "1";
+    process.env.ANTHROPIC_API_KEY = "";
+    assert.equal(await aiCandidates({ mode: "similar", anchors: [1012], users: [a.id] }), null);
+    assert.equal(fake.calls.filter((c) => c === "/v1/messages").length, before, "Claude was called anyway");
   });
 
   fake.close();
