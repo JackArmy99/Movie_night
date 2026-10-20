@@ -7,7 +7,7 @@ import { execSync } from "node:child_process";
 import { parseCsv } from "../lib/csv";
 import { mergeExport, verdictFor, eloFor } from "../lib/letterboxd";
 import { eloUpdate, nextPair } from "../lib/elo";
-import { passes, parseFilters, scoreCandidates, seedWeight } from "../lib/score";
+import { passes, parseFilters, qualityFactor, scoreCandidates, seedWeight } from "../lib/score";
 import { toIcs } from "../lib/ics";
 import { startFake, FILMS, recsFor } from "./fake-tmdb";
 
@@ -109,6 +109,13 @@ async function main() {
     assert.ok(seedWeight("like") > seedWeight("seen"));
     assert.equal(seedWeight("unseen"), 0);
     assert.ok(seedWeight("dislike") < 0);
+  });
+
+  await test("Quality: acclaimed beats middling; few votes can't fake acclaim", () => {
+    assert.ok(qualityFactor(8.2, 20000) > 2 * qualityFactor(6.8, 20000));
+    assert.ok(qualityFactor(6.0, 5000) < 0.5);
+    assert.ok(qualityFactor(8.4, 30000) > qualityFactor(9.5, 40), "40 votes outranked 30,000");
+    assert.ok(qualityFactor(2, 5000) > 0, "never zero — a film can still surface");
   });
 
   await test("Filters: sliders, unknown scores, services", () => {

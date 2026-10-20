@@ -33,8 +33,19 @@ Claude (`lib/claude.ts`, Haiku 5.5 default, monthly cap).
 ## Rules
 - Never hand-date a migration; `npx prisma migrate dev --name x`.
 - `npm test` (needs a DB with "test" in its name) + `npx tsc --noEmit` +
-  `npx next build` before pushing. The cloud container can't reach TMDB/OMDb —
-  use `scripts/fake-tmdb.ts` (set `TMDB_BASE`/`OMDB_BASE`).
+  `npx next build` before pushing.
+- **Cloud sessions can reach TMDB/OMDb** (allowlisted in the environment, keys
+  as env vars `TMDB_TOKEN` / `OMDB_KEY`), but Node's fetch ignores the egress
+  proxy unless started with `NODE_USE_ENV_PROXY=1`. A browser driving the app
+  must reach it by the container IP (`hostname -I`), not localhost — Playwright
+  sends localhost through the proxy, which only accepts HTTPS tunnels.
+  `scripts/fake-tmdb.ts` (set `TMDB_BASE`/`OMDB_BASE`) still serves the tests.
+- Cookies are `secure` only when `x-forwarded-proto` is https (always on
+  Vercel); over plain http a secure cookie is dropped and sign-in loops.
+- Ranking multiplies taste by `qualityFactor()` (vote-count-shrunk TMDB score,
+  steep curve) and drops films under `MIN_VOTES`: TMDB "also liked" lists are
+  full of middling films. Checked on real data 20 Oct: before, a 6.0 film led
+  the list; after, acclaimed films did.
 - No CSS-glyph-in-OG-image tricks: `app/icon.tsx` draws an SVG because a ★
   character needs a font download at build time.
 - Credit JustWatch wherever providers are shown (TMDB terms).

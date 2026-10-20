@@ -4,7 +4,7 @@ import { db } from "./db";
 import { ensureDetails, ensureRatings, ensureRecs, providersOf, saveList } from "./movies";
 import { getMyServices } from "./settings";
 import { hasTmdb, topRated } from "./tmdb";
-import { Filters, passes, passesCheap, scoreCandidates, SEEN, Seed, Verdict } from "./score";
+import { Filters, MIN_VOTES, passes, passesCheap, qualityFactor, scoreCandidates, SEEN, Seed, Verdict } from "./score";
 
 // Fresh TMDB lookups allowed per page load. Each one is two quick calls; the
 // rest arrive on the next visit (lists are cached for two months).
@@ -76,8 +76,14 @@ export async function suggest(opts: {
   let pool: Cand[] = scored
     .map((s) => ({ ...s, movie: byId.get(s.movieId)! }))
     .filter((c) => c.movie && inGenre(c.movie.genreIds) && passesCheap(c.movie, opts.filters))
-    // A little credit for being well regarded, so ties go to the better film.
-    .map((c) => ({ movie: c.movie, score: c.score * (0.5 + c.movie.voteAverage / 20), because: c.because, fallback: false }))
+    // Obscure films with a handful of votes are mostly noise in TMDB's lists.
+    .filter((c) => c.movie.voteCount >= MIN_VOTES)
+    .map((c) => ({
+      movie: c.movie,
+      score: c.score * qualityFactor(c.movie.voteAverage, c.movie.voteCount),
+      because: c.because,
+      fallback: false,
+    }))
     .sort((a, b) => b.score - a.score);
 
   // Not enough taste data yet (or a niche genre): pad with acclaimed films.

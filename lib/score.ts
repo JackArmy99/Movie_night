@@ -154,3 +154,16 @@ export function parseFilters(sp: Record<string, string | string[] | undefined>):
     servicesOnly: sp.mine === "1",
   };
 }
+
+// How much a film's reputation multiplies its taste score. TMDB's average is
+// shrunk towards 6.5 when few people have voted (so a 9.0 from 40 votes
+// doesn't outrank a 8.4 from 30,000), then turned into a steep curve:
+// 6.0 → ×0.35, 7.0 → ×1, 8.0 → ×1.8. "People who liked X also liked" lists
+// are full of middling films; this keeps the acclaimed ones on top.
+export const MIN_VOTES = 200;
+
+export function qualityFactor(voteAverage: number, voteCount: number): number {
+  const prior = 500;
+  const q = (voteAverage * voteCount + 6.5 * prior) / (voteCount + prior);
+  return Math.max(0.05, (q - 5) / 2) ** 1.5;
+}

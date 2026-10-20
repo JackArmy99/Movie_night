@@ -1,6 +1,6 @@
 "use server";
 
-import { cookies } from "next/headers";
+import { cookies, headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { db } from "@/lib/db";
@@ -16,13 +16,24 @@ import { explain, hasClaude } from "@/lib/claude";
 
 const YEAR = 60 * 60 * 24 * 365;
 
+// Cookies are HTTPS-only whenever the site is served over HTTPS (always, on
+// Vercel). Over plain http — a laptop on the home network — a secure cookie
+// would be silently dropped and sign-in would loop.
+const cookieOpts = () => ({
+  httpOnly: true,
+  sameSite: "lax" as const,
+  secure: headers().get("x-forwarded-proto") === "https",
+  maxAge: YEAR,
+  path: "/",
+});
+
 // ---------- signing in ----------
 
 export async function login(_: unknown, form: FormData): Promise<{ error?: string }> {
   const passcode = process.env.APP_PASSCODE;
   if (!passcode) return { error: "APP_PASSCODE isn't set on the server yet." };
   if (String(form.get("passcode") ?? "").trim() !== passcode) return { error: "That's not the passcode." };
-  cookies().set(AUTH_COOKIE, await authToken(), { httpOnly: true, sameSite: "lax", secure: true, maxAge: YEAR, path: "/" });
+  cookies().set(AUTH_COOKIE, await authToken(), cookieOpts());
   redirect("/who");
 }
 
@@ -34,7 +45,7 @@ export async function createPeople(form: FormData) {
 }
 
 export async function pickUser(id: string) {
-  cookies().set(USER_COOKIE, id, { httpOnly: true, sameSite: "lax", secure: true, maxAge: YEAR, path: "/" });
+  cookies().set(USER_COOKIE, id, cookieOpts());
   redirect("/");
 }
 
