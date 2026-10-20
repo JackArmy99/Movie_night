@@ -1,7 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Card, nextCards, rateStars, swipe, undoSwipe } from "@/app/actions";
+import { nextCards, rateStars, swipe, undoSwipe } from "@/app/actions";
+import type { Card, DeckFilters } from "@/lib/deck";
 import { directionFor, MIN_DISTANCE, STAR_BEARINGS, SwipeAnswer, vectorFor } from "@/lib/swipe";
 
 type Stars = 1 | 2 | 3 | 4 | 5;
@@ -26,13 +27,14 @@ function StarStamp({ stars }: { stars: number }) {
   );
 }
 
-export function SwipeDeck({ genre }: { genre: number }) {
+export function SwipeDeck({ genre, filters = {} }: { genre: number; filters?: DeckFilters }) {
   const [queue, setQueue] = useState<Card[]>([]);
   const [history, setHistory] = useState<{ card: Card; answer: SwipeAnswer }[]>([]);
   const [drag, setDrag] = useState({ dx: 0, dy: 0, active: false });
   const [flying, setFlying] = useState<{ answer: SwipeAnswer; x: number; y: number } | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [empty, setEmpty] = useState<string | null>(null);
   const [done, setDone] = useState(0);
   const start = useRef<{ x: number; y: number } | null>(null);
   const fetching = useRef(false);
@@ -42,8 +44,9 @@ export function SwipeDeck({ genre }: { genre: number }) {
     if (fetching.current) return;
     fetching.current = true;
     try {
-      const res = await nextCards(genre, [...known.current]);
+      const res = await nextCards(genre, [...known.current], filters);
       if (res.error) setError(res.error);
+      if (res.done) setEmpty(res.done);
       res.cards.forEach((c) => known.current.add(c.id));
       setQueue((q) => [...q, ...res.cards.filter((c) => !q.some((x) => x.id === c.id))]);
     } catch {
@@ -52,6 +55,8 @@ export function SwipeDeck({ genre }: { genre: number }) {
       fetching.current = false;
       setLoading(false);
     }
+    // filters only change with a new deck (the page remounts it).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [genre]);
 
   useEffect(() => {
@@ -158,7 +163,7 @@ export function SwipeDeck({ genre }: { genre: number }) {
 
         <div
           className="relative z-10 mx-auto aspect-[2/3] touch-none"
-          style={{ width: "min(100%, calc((100dvh - 420px) * 0.6667))" }}
+          style={{ width: "min(100%, calc((100dvh - 360px) * 0.6667))" }}
         >
           {queue.slice(1, 3).reverse().map((c, i) => (
             <div
@@ -221,7 +226,7 @@ export function SwipeDeck({ genre }: { genre: number }) {
             </div>
           ) : (
             <div className="absolute inset-0 flex items-center justify-center rounded-3xl border border-dashed border-line p-6 text-center text-gray-400">
-              {loading ? "Loading films…" : error ?? "That's every film in this genre. Impressive."}
+              {loading ? "Loading films…" : error ?? empty ?? "That's every film here that fits. Try other filters."}
             </div>
           )}
         </div>
@@ -229,22 +234,7 @@ export function SwipeDeck({ genre }: { genre: number }) {
 
       {error && card && <p className="mt-1 text-center text-sm text-red-400">{error}</p>}
 
-      <div className="mt-3 grid grid-cols-5 gap-2">
-        {STARS.map((n) => (
-          <button
-            key={n}
-            onClick={() => answer({ kind: "stars", stars: n })}
-            className="btn-ghost gap-0.5 px-0 py-2.5 text-sm"
-            aria-label={`${n} star${n > 1 ? "s" : ""}`}
-          >
-            {n}
-            <span className="text-accent">★</span>
-          </button>
-        ))}
-      </div>
-      <button onClick={() => answer({ kind: "unseen" })} className="btn-ghost mt-2 w-full py-2.5 text-sm">
-        Haven&apos;t seen it ↓ <span className="text-xs text-gray-400">(goes to “To decide”)</span>
-      </button>
+      <p className="mt-2 text-center text-xs text-gray-500">Swipe towards the stars you&apos;d give it · down if you haven&apos;t seen it</p>
     </div>
   );
 }

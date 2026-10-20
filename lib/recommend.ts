@@ -4,6 +4,7 @@ import { db } from "./db";
 import { ensureDetails, ensureRatings, ensureRecs, providersOf, saveList } from "./movies";
 import { getMyServices } from "./settings";
 import { hasTmdb, topRated } from "./tmdb";
+import { similarPool } from "./similar";
 import { Filters, MIN_VOTES, PASS, passes, passesCheap, reputationFactor, scoreCandidates, SEEN, Seed, Verdict } from "./score";
 
 // Fresh TMDB lookups allowed per page load. Each one is two quick calls; the
@@ -27,6 +28,7 @@ export async function suggest(opts: {
   filters: Filters;
   limit?: number;
   extraGenres?: number[]; // Tonight mode: any of these
+  like?: number[]; // "Similar to…": only films like these, taste breaks ties
 }): Promise<Suggestion[]> {
   const limit = opts.limit ?? 20;
   const genres = opts.extraGenres?.length ? opts.extraGenres : opts.genre ? [opts.genre] : [];
@@ -76,21 +78,40 @@ export async function suggest(opts: {
     genre: genres.length === 1 ? genres[0] : 0,
   });
 
-  const candidateRows = await db.movie.findMany({
-    where: { id: { in: scored.map((s) => s.movieId) } },
-  });
+  // What to rank: films your taste points at — or, with "Similar to…", films
+  // like the chosen ones, where your taste only breaks ties.
+  const like = opts.like ?? [];
+  type Base = { id: number; taste: number; because: number[] };
+  let base: Base[];
+  if (like.length) {
+    const closeness = await similarPool(like, { minSize: limit * 4, excluded });
+    const tasteOf = new Map(scored.map((s) => [s.movieId, s.score]));
+    const maxTaste = Math.max(1e-9, ...scored.map((s) => s.score));
+    base = [...closeness].map(([id, c]) => ({
+      id,
+      taste: c * (1 + 0.5 * Math.min(1, Math.max(0, (tasteOf.get(id) ?? 0) / maxTaste))),
+      because: like,
+    }));
+    for (const r of await db.movie.findMany({ where: { id: { in: like } }, select: { id: true, title: true } })) {
+      titles.set(r.id, r.title);
+    }
+  } else {
+    base = scored.map((s) => ({ id: s.movieId, taste: s.score, because: s.because }));
+  }
+
+  const candidateRows = await db.movie.findMany({ where: { id: { in: base.map((b) => b.id) } } });
   const byId = new Map(candidateRows.map((m) => [m.id, m]));
 
   type Cand = { movie: Movie; score: number; taste: number; because: number[]; fallback: boolean };
-  let pool: Cand[] = scored
-    .map((s) => ({ ...s, movie: byId.get(s.movieId)! }))
+  let pool: Cand[] = base
+    .map((b) => ({ ...b, movie: byId.get(b.id)! }))
     .filter((c) => c.movie && inGenre(c.movie.genreIds) && passesCheap(c.movie, opts.filters))
     // Obscure films with a handful of votes are mostly noise in TMDB's lists.
     .filter((c) => c.movie.voteCount >= MIN_VOTES)
     .map((c) => ({
       movie: c.movie,
-      taste: c.score,
-      score: c.score * reputationFactor(c.movie),
+      taste: c.taste,
+      score: c.taste * reputationFactor(c.movie),
       because: c.because,
       fallback: false,
     }))
@@ -111,7 +132,8 @@ export async function suggest(opts: {
     .sort((a, b) => b.score - a.score);
 
   // Not enough taste data yet (or a niche genre): pad with acclaimed films.
-  if (pool.length < limit * 2 && hasTmdb()) {
+  // (Not with "Similar to…": acclaimed films that aren't like X don't belong.)
+  if (!like.length && pool.length < limit * 2 && hasTmdb()) {
     const seenIds = new Set(pool.map((c) => c.movie.id));
     for (const page of [1, 2, 3]) {
       const res = await topRated(genres[0] ?? 0, page);

@@ -109,6 +109,10 @@ export function startFake(port = 0): Promise<{ url: string; close: () => void; c
       const g = Number(url.searchParams.get("with_genres") ?? 0);
       let list = FILMS.filter((f) => !g || f.genre_ids.includes(g));
       if (url.searchParams.get("region")) list = FILMS.filter((f) => nlDate(f.id));
+      const from = url.searchParams.get("primary_release_date.gte");
+      if (from) list = list.filter((f) => f.release_date >= from);
+      const minVote = Number(url.searchParams.get("vote_average.gte") ?? 0);
+      if (minVote) list = list.filter((f) => f.vote_average >= minVote);
       const sort = url.searchParams.get("sort_by");
       if (sort === "vote_average.desc") list = [...list].sort((a, b) => b.vote_average - a.vote_average);
       else list = [...list].sort((a, b) => b.vote_count - a.vote_count);

@@ -101,12 +101,20 @@ type Page = { page: number; total_pages: number; results: TmdbListItem[] };
 
 // Films in a genre, most-voted first: the order in which you are most likely
 // to have already seen them, which is what the swipe deck wants.
-export async function mostWatched(genreId: number, page: number): Promise<Page> {
+// Optional narrowing for a filtered swipe deck: earliest year, and a minimum
+// TMDB score as a cheap first pass before the IMDb/RT check.
+export async function mostWatched(
+  genreId: number,
+  page: number,
+  opts: { fromYear?: number; minVote?: number } = {},
+): Promise<Page> {
   return get<Page>("/discover/movie", {
     sort_by: "vote_count.desc",
     include_adult: "false",
     page,
     ...(genreId ? { with_genres: genreId } : {}),
+    ...(opts.fromYear ? { "primary_release_date.gte": `${opts.fromYear}-01-01` } : {}),
+    ...(opts.minVote ? { "vote_average.gte": opts.minVote } : {}),
   });
 }
 

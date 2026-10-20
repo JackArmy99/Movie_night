@@ -43,7 +43,16 @@ const PICKERS: Picker[] = [
 // Filters live in the address (?imdb=7&rt=80&from=2000), so a filtered list
 // can be bookmarked or shared between your phones. They're always on screen:
 // tap one and your phone's own picker opens.
-export function FilterBar({ showFor = true, rtAvailable }: { showFor?: boolean; rtAvailable: boolean }) {
+// `deck`: the swipe deck's version — only IMDb, Rotten Tomatoes and year.
+export function FilterBar({
+  showFor = true,
+  rtAvailable,
+  deck = false,
+}: {
+  showFor?: boolean;
+  rtAvailable: boolean;
+  deck?: boolean;
+}) {
   const params = useSearchParams();
   const router = useRouter();
   const path = usePathname();
@@ -61,10 +70,12 @@ export function FilterBar({ showFor = true, rtAvailable }: { showFor?: boolean; 
 
   const mine = params.get("mine") === "1";
   const solo = params.get("for") === "me";
-  const anySet = PICKERS.some((p) => params.get(p.key));
+  const pickers = deck ? PICKERS.filter((p) => p.key !== "len") : PICKERS;
+  const anySet = pickers.some((p) => params.get(p.key));
 
   return (
     <div className="space-y-2">
+      {!deck && (
       <div className="flex flex-wrap gap-2">
         {showFor && (
           <>
@@ -80,8 +91,9 @@ export function FilterBar({ showFor = true, rtAvailable }: { showFor?: boolean; 
           On our services
         </button>
       </div>
+      )}
       <div className="flex flex-wrap items-center gap-2">
-        {PICKERS.map((p) => {
+        {pickers.map((p) => {
           const value = params.get(p.key) ?? "";
           const disabled = p.key === "rt" && !rtAvailable;
           return (

@@ -54,6 +54,7 @@ export function MovieRow({
   why,
   onWatchlist,
   note,
+  becausePrefix = "Because of",
 }: {
   m: Movie;
   mine: number[];
@@ -61,6 +62,7 @@ export function MovieRow({
   why?: string | null;
   onWatchlist?: boolean;
   note?: string;
+  becausePrefix?: string;
 }) {
   const img = poster(m.posterPath, "w185");
   return (
@@ -81,7 +83,9 @@ export function MovieRow({
         {why ? (
           <p className="text-sm text-gray-200">{why}</p>
         ) : because?.length ? (
-          <p className="text-xs text-gray-400">Because of {because.map((b) => b.title).join(" & ")}</p>
+          <p className="text-xs text-gray-400">
+            {becausePrefix} {because.map((b) => b.title).join(" & ")}
+          </p>
         ) : note ? (
           <p className="text-xs text-gray-400">{note}</p>
         ) : (

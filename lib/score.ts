@@ -221,3 +221,23 @@ export function reputationFactor(m: Reputation): number {
   const { rating, votes } = trustedRating(m);
   return qualityFactor(rating, votes);
 }
+
+// "Similar to…": how close each film is to a set of anchor films, from their
+// TMDB "also liked" lists. Near the top of a list counts more, and a film that
+// turns up for two or more anchors gets a 1.5× bonus, so with Arrival +
+// Interstellar the films close to BOTH come first.
+export function blendCloseness(lists: number[][], weight = 1): Map<number, number> {
+  const score = new Map<number, number>();
+  const hits = new Map<number, number>();
+  for (const list of lists) {
+    const seen = new Set<number>();
+    list.forEach((id, rank) => {
+      if (seen.has(id)) return;
+      seen.add(id);
+      score.set(id, (score.get(id) ?? 0) + weight * positionFactor(rank));
+      hits.set(id, (hits.get(id) ?? 0) + 1);
+    });
+  }
+  for (const [id, n] of hits) if (n >= 2) score.set(id, score.get(id)! * 1.5);
+  return score;
+}

@@ -13,6 +13,8 @@ import { MovieRow } from "@/components/MovieRow";
 import { FilterBar } from "@/components/FilterBar";
 import { GenrePicker } from "@/components/GenrePicker";
 import { ServicePicker } from "@/components/ServicePicker";
+import { SimilarPicker } from "@/components/SimilarPicker";
+import { parseLike } from "@/lib/similar";
 import { WhyButton } from "@/components/WhyButton";
 
 export const dynamic = "force-dynamic";
@@ -42,13 +44,16 @@ function href(sp: SP, patch: SP) {
 export default async function Tonight({ searchParams }: { searchParams: SP }) {
   await me();
   const sp = searchParams;
-  const [services, mine, rtKnown] = await Promise.all([
+  const like = parseLike(sp.like);
+  const [services, mine, rtKnown, liked] = await Promise.all([
     serviceList(),
     getMyServices(),
     // Only offer the Rotten Tomatoes filter once some RT scores exist —
     // otherwise it would hide every film.
     db.movie.count({ where: { rtScore: { not: null } } }),
+    db.movie.findMany({ where: { id: { in: like } }, select: { id: true, title: true } }),
   ]);
+  const chosen = like.map((id) => liked.find((m) => m.id === id)).filter((m) => m !== undefined);
   return (
     <main className="pb-tabs space-y-4">
       <Header title="Tonight" />
@@ -65,6 +70,7 @@ export default async function Tonight({ searchParams }: { searchParams: SP }) {
           ))}
           <GenrePicker />
         </div>
+        <SimilarPicker chosen={chosen} />
         <ServicePicker services={services} initial={mine} />
         <FilterBar rtAvailable={rtKnown > 0} />
       </section>
@@ -97,7 +103,8 @@ async function Picks({ sp }: { sp: SP }) {
   if (!mine.length) filters.servicesOnly = false;
   const limit = Math.min(30, Math.max(STEP, Number(sp.n) || STEP));
 
-  const picks = await suggest({ users, genre: 0, extraGenres: genres, filters, limit });
+  const like = parseLike(sp.like);
+  const picks = await suggest({ users, genre: 0, extraGenres: genres, filters, limit, like });
   const picked = new Set(picks.map((p) => p.movie.id));
 
   // Your watchlist too, with the same filters: films one of you already
@@ -115,7 +122,9 @@ async function Picks({ sp }: { sp: SP }) {
   return (
     <div className="space-y-5">
       <section className="space-y-3">
-        <h2 className="font-semibold">{users.length > 1 ? "Top picks for the two of you" : "Top picks for you"}</h2>
+        <h2 className="font-semibold">
+          {like.length ? "Films like these" : users.length > 1 ? "Top picks for the two of you" : "Top picks for you"}
+        </h2>
         {hasClaude() && unexplained.length > 0 && (
           <WhyButton
             ids={unexplained.map((s) => s.movie.id)}
@@ -131,6 +140,7 @@ async function Picks({ sp }: { sp: SP }) {
               because={s.because}
               why={s.movie.why}
               onWatchlist={s.onWatchlist}
+              becausePrefix={like.length ? "Like" : "Because of"}
               note={s.fallback ? "Highly rated — rate more films for personal picks" : undefined}
             />
           ))

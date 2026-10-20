@@ -16,6 +16,7 @@ import {
   seedWeight,
   trustedRating,
   verdictForStars,
+  blendCloseness,
 } from "../lib/score";
 import { directionFor } from "../lib/swipe";
 import { pickTrailer } from "../lib/tmdb";
@@ -207,6 +208,17 @@ async function main() {
     assert.equal(parseRatingLine("tconst\taverageRating\tnumVotes"), null);
   });
 
+  await test("Similar to: films close to several anchors come first", () => {
+    const c = blendCloseness([
+      [10, 11, 12],
+      [13, 12, 14],
+    ]);
+    const order = [...c.entries()].sort((a, b) => b[1] - a[1]).map(([id]) => id);
+    assert.equal(order[0], 12, "the film both anchors list should lead");
+    assert.ok(c.get(10)! > c.get(11)!, "higher on a list = closer");
+    assert.ok(blendCloseness([[1]], 0.5).get(1)! < blendCloseness([[1]]).get(1)!, "second hop counts half");
+  });
+
   await test("Calendar feed: valid iCalendar, all-day, escaped, folded", () => {
     const ics = toIcs("Test", [
       { uid: "nl-1@x", date: "2026-12-31", title: "Film; with, specials", description: "x".repeat(200) },
@@ -368,6 +380,61 @@ async function main() {
     }
     assert.ok(await omdbRatings("tt0001002"), "a different (working) key is tried straight away");
     assert.equal((await omdbStatus())?.state, "ok");
+  });
+
+  await test("similarPool: no anchors, nothing seen; a second hop when too small", async () => {
+    const { similarPool } = await import("../lib/similar");
+    const anchors = [1000, 1018];
+    const seen = new Set(recsFor(1000).slice(0, 3).map((f) => f.id));
+    const pool = await similarPool(anchors, { excluded: seen });
+    assert.ok(pool.size > 0);
+    for (const id of anchors) assert.ok(!pool.has(id), "anchor in its own pool");
+    for (const id of seen) assert.ok(!pool.has(id), "excluded film in the pool");
+    const big = await similarPool(anchors, { minSize: pool.size + 50, excluded: seen });
+    assert.ok(big.size > pool.size, "second hop didn't widen the pool");
+  });
+
+  await test("suggest({like}): only films like the chosen ones, never seen", async () => {
+    const { similarPool } = await import("../lib/similar");
+    const like = [1003];
+    const pool = await similarPool(like, { minSize: 80 });
+    const list = await suggest({ users: [a.id, b.id], genre: 0, filters: {}, like, limit: 10 });
+    assert.ok(list.length > 0, "no similar suggestions");
+    const seenIds = new Set((await db.swipe.findMany({ where: { verdict: { in: ["superlike", "like", "dislike", "seen", "pass"] } } })).map((s) => s.movieId));
+    for (const s of list) {
+      assert.ok(pool.has(s.movie.id), `${s.movie.title} isn't like the anchor`);
+      assert.ok(!seenIds.has(s.movie.id), `${s.movie.title} was seen or passed`);
+      assert.ok(!s.fallback, "no top-rated padding in like-mode");
+      assert.deepEqual(s.because.map((x) => x.id), like);
+    }
+  });
+
+  await test("Swipe deck filters: year/IMDb honoured, own bookmark per filter, Similar to", async () => {
+    const { deckCards } = await import("../lib/deck");
+    const plain = await deckCards(a.id, 0, []);
+    assert.ok(plain.cards.length >= 10, `only ${plain.cards.length} cards`);
+    const f = { from: 2010, imdb: 7 };
+    const filtered = await deckCards(a.id, 0, [], f);
+    assert.ok(filtered.cards.length > 0, "filters left nothing");
+    const rows = await db.movie.findMany({ where: { id: { in: filtered.cards.map((c) => c.id) } } });
+    for (const m of rows) {
+      assert.ok((m.year ?? 0) >= 2010, `${m.title} is from ${m.year}`);
+      assert.ok((m.imdbRating ?? m.voteAverage) >= 7, `${m.title} IMDb ${m.imdbRating}`);
+    }
+    // Answer the filtered page entirely: only that filter's bookmark moves.
+    const before = await db.setting.findMany({ where: { key: { startsWith: `deck:${a.id}:0` } } });
+    assert.ok(!before.some((k) => k.key.endsWith("|")), "filtered deck shouldn't share the plain bookmark");
+    const like = await deckCards(a.id, 0, [], { like: [1005] });
+    const pool = await (await import("../lib/similar")).similarPool([1005], { minSize: 60 });
+    assert.ok(like.cards.length > 0);
+    for (const c of like.cards) assert.ok(pool.has(c.id), `${c.title} isn't like the anchor`);
+    const votes = (await db.movie.findMany({ where: { id: { in: like.cards.map((c) => c.id) } } }))
+      .sort((x, y) => like.cards.findIndex((c) => c.id === x.id) - like.cards.findIndex((c) => c.id === y.id))
+      .map((m) => m.voteCount);
+    const direct = like.cards.filter((c) => pool.direct.has(c.id)).length;
+    assert.ok(like.cards.slice(0, direct).every((c) => pool.direct.has(c.id)), "direct matches should come first");
+    const dv = votes.slice(0, direct);
+    assert.deepEqual(dv, [...dv].sort((x, y) => y - x), "most-watched first among direct matches");
   });
 
   fake.close();

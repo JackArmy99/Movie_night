@@ -24,6 +24,17 @@ Claude (`lib/claude.ts`, Haiku 5.5 default, monthly cap).
   trailers (`Movie.trailerKey`, TMDB `videos`, `pickTrailer()`).
 - Tabs: Swipe · Search (rate any film) · Tonight (all suggestions: moods/genre,
   services, `FilterBar`) · Watchlist · Cinema. `/suggest` only redirects.
+- "Similar to…" (`?like=id,id`, max 5; `components/SimilarPicker.tsx`) works in
+  Tonight and the swipe deck. `similarPool()` (`lib/similar.ts`) blends the
+  anchors' TMDB "also liked" lists (`blendCloseness`, 1.5× for films shared by
+  2+ anchors), adds a half-weight second hop when the pool is small, and marks
+  `direct` matches. Tonight: closeness × (1 + ½ taste), then IMDb/RT. Deck: direct
+  matches first, most-watched first within; films under `MIN_VOTES` are skipped.
+- Swipe deck logic lives in `lib/deck.ts` (`deckCards`, testable without a
+  session); `nextCards` is a thin action. Year goes to TMDB discover; IMDb/RT are
+  checked per card via OMDb (cached), so each filter combination has its own
+  bookmark (`deck:<user>:<genre>:<sig>`). No buttons on the deck screen by
+  request; only the swipe, the labels and Undo.
 - Ratings: IMDb from IMDb's daily `title.ratings.tsv.gz` (`lib/imdb.ts`, Vercel
   Cron → `/api/cron/imdb`, `CRON_SECRET`); OMDb for Rotten Tomatoes/Metacritic and
   same-day IMDb, never overwriting a fresh file value. `trustedRating()` = IMDb

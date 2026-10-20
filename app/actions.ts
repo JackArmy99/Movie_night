@@ -8,6 +8,7 @@ import { me, partnerOf } from "@/lib/session";
 import { AUTH_COOKIE, USER_COOKIE, authToken } from "@/lib/token";
 import { getJson, setJson, setSetting } from "@/lib/settings";
 import { saveList, ensureDetails } from "@/lib/movies";
+import { deckCards, type Card, type DeckFilters } from "@/lib/deck";
 import * as tmdb from "@/lib/tmdb";
 import { eloUpdate } from "@/lib/elo";
 import { LbFilm, eloFor, verdictFor } from "@/lib/letterboxd";
@@ -56,59 +57,14 @@ export async function switchUser() {
 
 // ---------- the swipe deck ----------
 
-export type Card = {
-  id: number;
-  title: string;
-  year: number | null;
-  poster: string | null;
-  overview: string;
-  score: number;
-};
 
-// The next films to swipe in a genre, most-watched first, skipping ones you've
-// already answered. Remembers how far down TMDB's list you've got per genre.
-export async function nextCards(genre: number, skip: number[]): Promise<{ cards: Card[]; error?: string }> {
+export async function nextCards(
+  genre: number,
+  skip: number[],
+  f: DeckFilters = {},
+): Promise<{ cards: Card[]; error?: string; done?: string }> {
   const user = await me();
-  if (!tmdb.hasTmdb()) return { cards: [], error: "TMDB isn't connected yet — add TMDB_TOKEN." };
-  const cursorKey = `deck:${user.id}:${genre}`;
-  const start = await getJson<number>(cursorKey, 1);
-  let bookmark = start;
-  let stillAtBookmark = true;
-  const cards: Card[] = [];
-  const skipSet = new Set(skip);
-
-  for (let page = start; page < start + 6 && cards.length < 10; page++) {
-    const res = await tmdb.mostWatched(genre, page);
-    await saveList(res.results);
-    const answered = new Set(
-      (
-        await db.swipe.findMany({
-          where: { userId: user.id, movieId: { in: res.results.map((r) => r.id) } },
-          select: { movieId: true },
-        })
-      ).map((s) => s.movieId),
-    );
-    const open = res.results.filter((r) => !answered.has(r.id));
-    // Only move the bookmark past pages you've fully answered, so closing the
-    // app halfway down a page never skips anything.
-    if (stillAtBookmark && open.length === 0) bookmark = page + 1;
-    else stillAtBookmark = false;
-    for (const r of open) {
-      if (skipSet.has(r.id)) continue;
-      skipSet.add(r.id);
-      cards.push({
-        id: r.id,
-        title: r.title,
-        year: r.release_date ? Number(r.release_date.slice(0, 4)) : null,
-        poster: tmdb.poster(r.poster_path, "w500"),
-        overview: (r.overview ?? "").slice(0, 220),
-        score: r.vote_average ?? 0,
-      });
-    }
-    if (page >= Math.min(res.total_pages, 500)) break;
-  }
-  if (bookmark !== start) await setJson(cursorKey, bookmark);
-  return { cards };
+  return deckCards(user.id, genre, skip, f);
 }
 
 // An answer without stars: "unseen" (haven't seen it), "pass" (not
@@ -281,6 +237,21 @@ export async function importBatch(films: LbFilm[]): Promise<ImportResult> {
     }),
   );
   return result;
+}
+
+// "Similar to…" picker: find films by title.
+export async function searchFilms(q: string): Promise<{ id: number; title: string; year: number | null; poster: string | null }[]> {
+  await me();
+  const query = q.trim().slice(0, 100);
+  if (!query || !tmdb.hasTmdb()) return [];
+  const hits = await tmdb.searchMany(query);
+  await saveList(hits);
+  return hits.slice(0, 6).map((h) => ({
+    id: h.id,
+    title: h.title,
+    year: h.release_date ? Number(h.release_date.slice(0, 4)) : null,
+    poster: tmdb.poster(h.poster_path, "w92"),
+  }));
 }
 
 // ---------- settings ----------
