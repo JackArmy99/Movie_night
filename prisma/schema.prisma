@@ -1,0 +1,99 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DATABASE_URL_UNPOOLED")
+}
+
+// One of the two of you.
+model User {
+  id        String          @id @default(cuid())
+  name      String
+  createdAt DateTime        @default(now())
+  swipes    Swipe[]
+  watchlist WatchlistItem[]
+}
+
+// A film, keyed by its TMDB id. Filled in lazily: a row starts with what a
+// TMDB list returns and gains runtime, ratings and providers when first shown.
+model Movie {
+  id          Int       @id // TMDB id
+  title       String
+  year        Int?
+  releaseDate String?
+  overview    String    @default("")
+  posterPath  String?
+  genreIds    Int[]
+  popularity  Float     @default(0)
+  voteAverage Float     @default(0)
+  voteCount   Int       @default(0)
+
+  runtime   Int?
+  imdbId    String?
+  detailsAt DateTime?
+
+  // Where to watch in the Netherlands (JustWatch data via TMDB).
+  providers   Json?
+  providersAt DateTime?
+
+  // From OMDb.
+  imdbRating Float?
+  rtScore    Int?
+  metascore  Int?
+  ratingsAt  DateTime?
+
+  // TMDB "recommendations" for this film, in TMDB's order.
+  recIds Int[]
+  recsAt DateTime?
+
+  // Dutch cinema release date (YYYY-MM-DD) when known.
+  nlRelease String?
+
+  // Claude's one-line "why you'd both like it".
+  why   String?
+  whyAt DateTime?
+
+  swipes    Swipe[]
+  watchlist WatchlistItem[]
+}
+
+// What one person said about one film.
+//   superlike | like | dislike  — seen it, with an opinion
+//   seen                        — seen it, no opinion (e.g. Letterboxd, unrated)
+//   unseen                      — hasn't seen it (stays eligible for suggestions)
+model Swipe {
+  userId      String
+  movieId     Int
+  verdict     String
+  // Ranking score among super likes ("this or that").
+  elo         Float    @default(1000)
+  comparisons Int      @default(0)
+  source      String   @default("swipe") // swipe | letterboxd | watchlist
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  movie Movie @relation(fields: [movieId], references: [id], onDelete: Cascade)
+
+  @@id([userId, movieId])
+  @@index([movieId])
+}
+
+model WatchlistItem {
+  userId  String
+  movieId Int
+  addedAt DateTime @default(now())
+
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  movie Movie @relation(fields: [movieId], references: [id], onDelete: Cascade)
+
+  @@id([userId, movieId])
+}
+
+model Setting {
+  key   String @id
+  value String
+}

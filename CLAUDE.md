@@ -1,0 +1,40 @@
+# CLAUDE.md — Movie Night
+
+A private two-person film app for Jack and his girlfriend (Netherlands).
+Jack is a coding beginner: explain in plain English, results first, say what
+things cost. He uses it on phones; it's hosted on **Vercel + Neon Postgres**
+(free tiers) — he never runs it locally.
+
+## Stack
+Next.js 14 App Router + TypeScript + Tailwind, Prisma 5.22 + PostgreSQL,
+server actions in `app/actions.ts`. Data: TMDB (films, recommendations, NL
+providers = JustWatch, NL release dates), OMDb (IMDb/RT/Metacritic), optional
+Claude (`lib/claude.ts`, Haiku 5.5 default, monthly cap).
+
+## How it works
+- `Swipe.verdict`: superlike | like | dislike | seen | unseen. Anything but
+  `unseen` means **seen → never suggested** (`SEEN` in `lib/score.ts`). This
+  exclusion is the app's whole reason to exist; keep it airtight.
+- `lib/score.ts` is pure (tested): each seen film's TMDB recommendations score
+  candidates; super likes weigh by Elo rank, dislikes subtract; two people
+  combine as `a + b + min(a, b)` so agreement wins.
+- `lib/recommend.ts` orchestrates: fetch missing rec lists (max 25/load), score,
+  pad with top-rated when thin, then look up details/ratings/providers only for
+  films about to be shown, until enough pass the sliders.
+- Everything external is cached on `Movie` (providers 7d, ratings 30d, recs 60d).
+- Swipe deck order = TMDB `vote_count.desc` (most-watched = most likely seen);
+  per-user, per-genre bookmark in `Setting deck:<user>:<genre>`.
+- Auth: one shared passcode → HMAC cookie (`middleware.ts`); profile cookie
+  picks which of the two people is on this phone. Calendar feed is public but
+  keyed (`calendarKey()`).
+- Letterboxd import: client reads the export .zip (`lib/unzip.ts`), merges
+  watched/ratings/watchlist by title+year, sends batches of 20 to `importBatch`.
+
+## Rules
+- Never hand-date a migration; `npx prisma migrate dev --name x`.
+- `npm test` (needs a DB with "test" in its name) + `npx tsc --noEmit` +
+  `npx next build` before pushing. The cloud container can't reach TMDB/OMDb —
+  use `scripts/fake-tmdb.ts` (set `TMDB_BASE`/`OMDB_BASE`).
+- No CSS-glyph-in-OG-image tricks: `app/icon.tsx` draws an SVG because a ★
+  character needs a font download at build time.
+- Credit JustWatch wherever providers are shown (TMDB terms).
