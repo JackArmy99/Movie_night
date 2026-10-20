@@ -353,6 +353,23 @@ async function main() {
     assert.ok(after!.rtScore != null, "RT still filled in from OMDb");
   });
 
+  await test("OMDb refusing the key is recorded and not retried on every film", async () => {
+    const { omdbRatings, omdbStatus } = await import("../lib/omdb");
+    const good = process.env.OMDB_KEY;
+    process.env.OMDB_KEY = "not-activated";
+    try {
+      assert.equal(await omdbRatings("tt0001000"), null);
+      assert.equal((await omdbStatus())?.state, "invalid_key");
+      const before = fake.calls.filter((c) => c.startsWith("/omdb")).length;
+      await omdbRatings("tt0001001");
+      assert.equal(fake.calls.filter((c) => c.startsWith("/omdb")).length, before, "asked OMDb again");
+    } finally {
+      process.env.OMDB_KEY = good;
+    }
+    assert.ok(await omdbRatings("tt0001002"), "a different (working) key is tried straight away");
+    assert.equal((await omdbStatus())?.state, "ok");
+  });
+
   fake.close();
   await db.$disconnect();
 }

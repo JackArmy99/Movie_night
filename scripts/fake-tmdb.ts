@@ -92,6 +92,9 @@ export function startFake(port = 0): Promise<{ url: string; close: () => void; c
       res.end(gzipSync(lines.join("\n") + "\n"));
       return;
     }
+    if (path.startsWith("/omdb") && url.searchParams.get("apikey") === "not-activated") {
+      return json({ Response: "False", Error: "Invalid API key!" }, 401);
+    }
     if (path.startsWith("/omdb")) {
       const imdb = url.searchParams.get("i") ?? "";
       const n = Number(imdb.replace(/\D/g, "")) || 0;

@@ -7,7 +7,6 @@ import { getMyServices } from "@/lib/settings";
 import { serviceList } from "@/lib/services";
 import { ensureDetails, ensureRatings, providersOf } from "@/lib/movies";
 import { parseFilters, passes } from "@/lib/score";
-import { hasOmdb } from "@/lib/omdb";
 import { hasClaude } from "@/lib/claude";
 import { Header, Nav } from "@/components/Nav";
 import { MovieRow } from "@/components/MovieRow";
@@ -43,7 +42,13 @@ function href(sp: SP, patch: SP) {
 export default async function Tonight({ searchParams }: { searchParams: SP }) {
   await me();
   const sp = searchParams;
-  const [services, mine] = await Promise.all([serviceList(), getMyServices()]);
+  const [services, mine, rtKnown] = await Promise.all([
+    serviceList(),
+    getMyServices(),
+    // Only offer the Rotten Tomatoes filter once some RT scores exist —
+    // otherwise it would hide every film.
+    db.movie.count({ where: { rtScore: { not: null } } }),
+  ]);
   return (
     <main className="pb-tabs space-y-4">
       <Header title="Tonight" />
@@ -61,7 +66,7 @@ export default async function Tonight({ searchParams }: { searchParams: SP }) {
           <GenrePicker />
         </div>
         <ServicePicker services={services} initial={mine} />
-        <FilterBar rtAvailable={hasOmdb()} />
+        <FilterBar rtAvailable={rtKnown > 0} />
       </section>
       <Suspense key={JSON.stringify(sp)} fallback={<Loading />}>
         <Picks sp={sp} />

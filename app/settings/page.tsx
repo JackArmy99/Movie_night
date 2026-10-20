@@ -3,13 +3,15 @@ import { allUsers, me } from "@/lib/session";
 import { getMyServices } from "@/lib/settings";
 import { hasTmdb, IMG } from "@/lib/tmdb";
 import { serviceList } from "@/lib/services";
-import { hasOmdb } from "@/lib/omdb";
+import { hasOmdb, omdbStatus } from "@/lib/omdb";
 import { hasClaude, monthlyCap, spentThisMonth, MODEL } from "@/lib/claude";
 import { renamePerson, resetDeck, saveServices, switchUser } from "../actions";
 import { Header, Nav } from "@/components/Nav";
 import { ImportForm } from "@/components/ImportForm";
+import { ImdbNowButton } from "@/components/ImdbNowButton";
 
 export const dynamic = "force-dynamic";
+export const maxDuration = 60; // the IMDb update button
 
 export default async function Settings({ searchParams }: { searchParams: { saved?: string } }) {
   const user = await me();
@@ -22,6 +24,7 @@ export default async function Settings({ searchParams }: { searchParams: { saved
   ]);
   const sorted = list;
   const lastImdb = (await db.movie.aggregate({ _max: { imdbAt: true } }))._max.imdbAt;
+  const omdb = await omdbStatus();
   const fromLb = (id: string) => counts.find((c) => c.userId === id && c.source === "letterboxd")?._count ?? 0;
 
   return (
@@ -87,12 +90,24 @@ export default async function Settings({ searchParams }: { searchParams: { saved
       <section className="card space-y-2 p-4 text-sm">
         <h2 className="font-semibold">Connections and costs</h2>
         <Row ok={hasTmdb()} label="TMDB (films, posters, where to watch)" note="free" />
-        <Row ok={hasOmdb()} label="OMDb (Rotten Tomatoes, Metacritic, same-day IMDb)" note="free, 1,000 lookups/day" />
+        <Row
+          ok={hasOmdb() && omdb?.state !== "invalid_key"}
+          label="OMDb (Rotten Tomatoes, Metacritic, same-day IMDb)"
+          note={omdb?.state === "invalid_key" ? "key refused" : "free, 1,000 lookups/day"}
+        />
+        {omdb?.state === "invalid_key" && (
+          <p className="rounded-lg bg-red-500/10 p-2 text-xs text-red-300">
+            OMDb says the key is invalid, so there are no Rotten Tomatoes scores. Usually the key isn&apos;t activated
+            yet: open OMDb&apos;s email and click the activation link. If it is, check <code>OMDB_KEY</code> in Vercel
+            holds just the 8 characters.
+          </p>
+        )}
         <Row
           ok={Boolean(process.env.CRON_SECRET)}
           label="IMDb ratings, refreshed daily from IMDb's own file"
           note={lastImdb ? `last ${lastImdb.toLocaleDateString("en-GB", { day: "numeric", month: "short" })}` : "free, needs CRON_SECRET"}
         />
+        <ImdbNowButton />
         <Row
           ok={hasClaude()}
           label={`Claude explanations (${MODEL})`}

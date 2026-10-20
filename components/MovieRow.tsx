@@ -3,16 +3,23 @@ import type { Movie } from "@prisma/client";
 import { poster, IMG } from "@/lib/tmdb";
 import { providersOf } from "@/lib/movies";
 import { WatchButton } from "./WatchButton";
+import { TrailerCard, TrailerToggle } from "./TrailerCard";
 
+// IMDb and Rotten Tomatoes first: the scores you two actually trust. TMDB's
+// own score only stands in while a film has no IMDb rating yet.
 export function Scores({ m }: { m: Movie }) {
   return (
     <div className="flex flex-wrap gap-1.5 text-xs">
-      {m.imdbRating != null && <span className="rounded bg-yellow-400/15 px-1.5 py-0.5 text-yellow-300">IMDb {m.imdbRating.toFixed(1)}</span>}
-      {m.rtScore != null && <span className="rounded bg-red-500/15 px-1.5 py-0.5 text-red-300">🍅 {m.rtScore}%</span>}
-      {m.metascore != null && <span className="rounded bg-green-500/15 px-1.5 py-0.5 text-green-300">Meta {m.metascore}</span>}
-      {m.imdbRating == null && m.voteAverage > 0 && (
-        <span className="rounded bg-sky-500/15 px-1.5 py-0.5 text-sky-300">TMDB {m.voteAverage.toFixed(1)}</span>
+      {m.imdbRating != null ? (
+        <span className="rounded bg-yellow-400/15 px-1.5 py-0.5 font-semibold text-yellow-300">IMDb {m.imdbRating.toFixed(1)}</span>
+      ) : (
+        m.voteAverage > 0 && (
+          <span className="rounded bg-sky-500/15 px-1.5 py-0.5 text-sky-300" title="No IMDb rating yet">
+            TMDB {m.voteAverage.toFixed(1)}
+          </span>
+        )
       )}
+      {m.rtScore != null && <span className="rounded bg-red-500/15 px-1.5 py-0.5 font-semibold text-red-300">🍅 {m.rtScore}%</span>}
       {m.runtime ? <span className="rounded bg-white/10 px-1.5 py-0.5 text-gray-300">{Math.floor(m.runtime / 60)}h {m.runtime % 60}m</span> : null}
     </div>
   );
@@ -57,7 +64,8 @@ export function MovieRow({
 }) {
   const img = poster(m.posterPath, "w185");
   return (
-    <div className="card flex gap-3 p-3">
+    <TrailerCard trailerKey={m.trailerKey} title={m.title} className="card p-3">
+    <div className="flex gap-3">
       <Link href={`/movie/${m.id}`} className="shrink-0">
         {img ? (
           <img src={img} alt="" className="h-36 w-24 rounded-lg object-cover" />
@@ -81,9 +89,13 @@ export function MovieRow({
         )}
         <div className="flex items-center justify-between gap-2 pt-1">
           <StreamLogos m={m} mine={mine} />
-          <WatchButton movieId={m.id} initial={Boolean(onWatchlist)} />
+          <div className="ml-auto flex gap-1.5">
+            {m.trailerKey && <TrailerToggle />}
+            <WatchButton movieId={m.id} initial={Boolean(onWatchlist)} />
+          </div>
         </div>
       </div>
     </div>
+    </TrailerCard>
   );
 }

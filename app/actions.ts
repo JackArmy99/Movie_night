@@ -314,6 +314,19 @@ export async function resetDeck() {
   revalidatePath("/swipe");
 }
 
+// "Update IMDb ratings now" in Settings — the same job the daily run does.
+export async function updateImdbNow(): Promise<{ message: string }> {
+  await me();
+  const { syncImdbRatings } = await import("@/lib/imdb");
+  try {
+    const r = await syncImdbRatings();
+    revalidatePath("/settings");
+    return { message: `Updated ${r.matched} of ${r.held} films in ${r.seconds}s.` };
+  } catch (err) {
+    return { message: `IMDb's file couldn't be fetched (${String((err as Error)?.message ?? err)}).` };
+  }
+}
+
 // ---------- Claude ----------
 
 export async function explainFilms(movieIds: number[], becauseTitles: Record<number, string[]>): Promise<{
