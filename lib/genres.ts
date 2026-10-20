@@ -26,3 +26,31 @@ export function genreName(id: number): string {
 
 // "0" in a URL means every genre.
 export const ALL = 0;
+
+// Superhero isn't a TMDB genre, but TMDB's keywords mark it reliably
+// (checked 20 Oct: Avengers, Dark Knight, Black Panther, Deadpool, Logan… yes;
+// Joker, Inception, Encanto no). "sh" stands for it wherever genre ids go.
+export const SUPERHERO = "sh";
+export const SUPERHERO_KEYWORDS = [9715, 155030, 180547, 229266]; // superhero, superhero team, MCU, DCEU
+
+export function isSuperhero(m: { keywordIds: number[] }): boolean {
+  return m.keywordIds.some((k) => SUPERHERO_KEYWORDS.includes(k));
+}
+
+const ALL_CUSTOM = [...GENRES.map((g) => ({ key: String(g.id), name: g.name })), { key: SUPERHERO, name: "Superhero" }];
+
+// The genre button's label in "Custom" mode: whichever list is shorter —
+// "No Horror, Superhero" or "Comedy, Romance".
+export function customLabel(ex: { genres: number[]; superhero: boolean }): string {
+  const off = new Set([...ex.genres.map(String), ...(ex.superhero ? [SUPERHERO] : [])]);
+  const on = ALL_CUSTOM.filter((i) => !off.has(i.key)).map((i) => i.name);
+  const offNames = ALL_CUSTOM.filter((i) => off.has(i.key)).map((i) => i.name);
+  const list = (names: string[]) => (names.length > 2 ? `${names.slice(0, 2).join(", ")} +${names.length - 2}` : names.join(", "));
+  if (!offNames.length) return "✏️ All genres";
+  if (!on.length) return "✏️ No genres picked";
+  return on.length < offNames.length ? `✏️ ${list(on)}` : `✏️ No ${list(offNames)}`;
+}
+
+// True when Custom has every genre unticked (nothing could be shown).
+export const nothingPicked = (ex: { genres: number[]; superhero: boolean }) =>
+  GENRES.every((g) => ex.genres.includes(g.id));

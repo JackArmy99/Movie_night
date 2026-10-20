@@ -46,11 +46,11 @@ export async function ensureDetails(ids: number[]): Promise<void> {
   if (!tmdb.hasTmdb() || !ids.length) return;
   const rows = await db.movie.findMany({
     where: { id: { in: ids } },
-    select: { id: true, detailsAt: true, providersAt: true, trailerAt: true },
+    select: { id: true, detailsAt: true, providersAt: true, trailerAt: true, keywordsAt: true },
   });
-  // trailerAt: films looked up before trailers existed get one more lookup.
+  // trailerAt / keywordsAt: films looked up before those existed get one more lookup.
   const stale = rows.filter(
-    (r) => older(r.detailsAt, RATINGS_TTL) || older(r.providersAt, PROVIDERS_TTL) || !r.trailerAt,
+    (r) => older(r.detailsAt, RATINGS_TTL) || older(r.providersAt, PROVIDERS_TTL) || !r.trailerAt || !r.keywordsAt,
   );
   const found = await pmap(stale, 8, ({ id }) => tmdb.details(id));
   const now = new Date();
@@ -74,6 +74,8 @@ export async function ensureDetails(ids: number[]): Promise<void> {
             nlRelease: d.nlRelease,
             trailerKey: d.trailerKey,
             trailerAt: now,
+            keywordIds: d.keywordIds,
+            keywordsAt: now,
             detailsAt: now,
             providersAt: now,
           },

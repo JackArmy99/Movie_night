@@ -33,6 +33,13 @@ Claude (`lib/claude.ts`, Haiku 5.5 default, monthly cap).
   paging (`?n=`). Hold a poster ~0.4 s then slide to re-rate (`starsFromX`, half
   steps; far left cancels); a non-passive touchmove listener stops the page
   scrolling meanwhile.
+- "Custom" genres (Tonight + deck, `?gx=27,sh` = the UNticked ones): any
+  unticked genre hides a film (`excludedBy`). Superhero = TMDB keywords
+  (`SUPERHERO_KEYWORDS`, stored as `Movie.keywordIds` from `details()`); TMDB
+  discover does it via `without_genres`/`without_keywords`, other paths check
+  after `ensureDetails`. When adding a filter, pass it through the PAGE too
+  (`app/tonight/page.tsx` → `suggest()`): tests call `suggest()` directly, so a
+  page that forgets to pass it slips through them (happened 20 Oct).
 - Server actions live in `app/actions/<area>.ts`; `app/actions/index.ts`
   re-exports them, so components import from `@/app/actions`.
 - "Similar to…" (`?like=id,id`, max 5; `components/SimilarPicker.tsx`) works in

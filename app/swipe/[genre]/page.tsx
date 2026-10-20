@@ -1,12 +1,12 @@
 import { db } from "@/lib/db";
 import { me } from "@/lib/session";
-import { genreName } from "@/lib/genres";
+import { customLabel, genreName, nothingPicked } from "@/lib/genres";
 import { parseLike } from "@/lib/similar";
 import { Header, Nav } from "@/components/Nav";
 import { SwipeDeck } from "@/components/SwipeDeck";
 import { ControlBar } from "@/components/ControlBar";
 import { GenreChoices } from "@/components/GenreChoices";
-import { SEEN } from "@/lib/score";
+import { parseExcluded, SEEN } from "@/lib/score";
 import { FilterBar } from "@/components/FilterBar";
 import { SimilarPicker } from "@/components/SimilarPicker";
 
@@ -22,7 +22,15 @@ const num = (v: string | string[] | undefined) => {
 export default async function Deck({ params, searchParams }: { params: { genre: string }; searchParams: SP }) {
   const user = await me();
   const genre = Number(params.genre) || 0;
-  const filters = { imdb: num(searchParams.imdb), rt: num(searchParams.rt), from: num(searchParams.from), like: parseLike(searchParams.like) };
+  const custom = searchParams.gx !== undefined;
+  const exclude = parseExcluded(searchParams.gx);
+  const filters = {
+    imdb: num(searchParams.imdb),
+    rt: num(searchParams.rt),
+    from: num(searchParams.from),
+    like: parseLike(searchParams.like),
+    ...(custom ? { exclude } : {}),
+  };
   const [liked, rtKnown, mySwipes] = await Promise.all([
     db.movie.findMany({ where: { id: { in: filters.like } }, select: { id: true, title: true } }),
     db.movie.count({ where: { rtScore: { not: null } } }),
@@ -46,8 +54,8 @@ export default async function Deck({ params, searchParams }: { params: { genre: 
     <main className="pb-tabs">
       <Header title="Swipe" />
       <ControlBar
-        genreLabel={genre ? genreName(genre) : "🎞️ Any genre"}
-        genreActive={genre !== 0}
+        genreLabel={custom ? customLabel(exclude) : genre ? genreName(genre) : "🎞️ Any genre"}
+        genreActive={custom || genre !== 0}
         genrePanel={<GenreChoices mode="deck" counts={counts} />}
         summary={summary}
         filtersPanel={
@@ -58,7 +66,11 @@ export default async function Deck({ params, searchParams }: { params: { genre: 
         }
       />
       {/* A new filter restarts the deck. */}
-      <SwipeDeck key={JSON.stringify(filters)} genre={genre} filters={filters} />
+      {custom && nothingPicked(exclude) ? (
+        <p className="card p-6 text-center text-sm text-gray-400">Pick at least one genre in ✏️ Custom.</p>
+      ) : (
+        <SwipeDeck key={JSON.stringify(filters) + genre} genre={genre} filters={filters} />
+      )}
       <Nav active="/swipe/0" />
     </main>
   );

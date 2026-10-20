@@ -8,6 +8,8 @@
 // separately and combined so a film you'd both like beats one only one of you
 // would love.
 
+import { SUPERHERO_KEYWORDS } from "./genres";
+
 export type Verdict = "superlike" | "like" | "seen" | "dislike" | "unseen" | "pass";
 
 export type Seed = {
@@ -240,4 +242,26 @@ export function blendCloseness(lists: number[][], weight = 1): Map<number, numbe
   }
   for (const [id, n] of hits) if (n >= 2) score.set(id, score.get(id)! * 1.5);
   return score;
+}
+
+// "Custom" genres: the ones you've unticked (`?gx=27,sh`). Any unticked genre
+// hides a film (so no Horror means no horror-comedies either).
+export type Excluded = { genres: number[]; superhero: boolean };
+export const NO_EXCLUDED: Excluded = { genres: [], superhero: false };
+
+export function parseExcluded(raw: string | string[] | undefined): Excluded {
+  const parts = (Array.isArray(raw) ? raw[0] : raw ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+  return {
+    genres: parts.map(Number).filter((n) => Number.isInteger(n) && n > 0),
+    superhero: parts.includes("sh"),
+  };
+}
+
+export const hasExcluded = (ex: Excluded) => ex.genres.length > 0 || ex.superhero;
+
+// Superhero is only known once a film's keywords are (after its details are
+// fetched); until then only the genre part applies.
+export function excludedBy(m: { genreIds: number[]; keywordIds?: number[] }, ex: Excluded): boolean {
+  if (m.genreIds.some((g) => ex.genres.includes(g))) return true;
+  return ex.superhero && (m.keywordIds ?? []).some((k) => SUPERHERO_KEYWORDS.includes(k));
 }

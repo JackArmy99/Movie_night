@@ -57,6 +57,10 @@ model Movie {
   // Dutch cinema release date (YYYY-MM-DD) when known.
   nlRelease String?
 
+  // TMDB keyword ids (used to spot superhero films, which TMDB has no genre for).
+  keywordIds Int[]     @default([])
+  keywordsAt DateTime?
+
   // YouTube id of the official trailer, when TMDB has one.
   trailerKey String?
   trailerAt  DateTime?

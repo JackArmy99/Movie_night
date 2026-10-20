@@ -3,6 +3,8 @@
 //
 // TMDB_TOKEN can be either the long "API Read Access Token" or the short "API
 // Key" — the settings page shows both and people paste whichever they see.
+import type { Excluded } from "./score";
+import { SUPERHERO_KEYWORDS } from "./genres";
 
 // Read when used, not at import, so tests can point it at a fake server.
 const base = () => process.env.TMDB_BASE ?? "https://api.themoviedb.org/3";
@@ -36,6 +38,7 @@ export type TmdbDetails = TmdbListItem & {
   providers: Providers;
   nlRelease: string | null;
   trailerKey: string | null;
+  keywordIds: number[];
 };
 
 export type TmdbVideo = {
@@ -106,7 +109,7 @@ type Page = { page: number; total_pages: number; results: TmdbListItem[] };
 export async function mostWatched(
   genreId: number,
   page: number,
-  opts: { fromYear?: number; minVote?: number } = {},
+  opts: { fromYear?: number; minVote?: number; exclude?: Excluded } = {},
 ): Promise<Page> {
   return get<Page>("/discover/movie", {
     sort_by: "vote_count.desc",
@@ -115,18 +118,30 @@ export async function mostWatched(
     ...(genreId ? { with_genres: genreId } : {}),
     ...(opts.fromYear ? { "primary_release_date.gte": `${opts.fromYear}-01-01` } : {}),
     ...(opts.minVote ? { "vote_average.gte": opts.minVote } : {}),
+    ...withoutParams(opts.exclude),
   });
+}
+
+// "Custom" genres, done by TMDB itself: leave out unticked genres and, if
+// unticked, superhero films (by keyword). "|" means "any of these".
+function withoutParams(ex?: Excluded): Record<string, string> {
+  if (!ex) return {};
+  return {
+    ...(ex.genres.length ? { without_genres: ex.genres.join("|") } : {}),
+    ...(ex.superhero ? { without_keywords: SUPERHERO_KEYWORDS.join("|") } : {}),
+  };
 }
 
 // Highly rated films in a genre — the fallback when there is nothing to base
 // suggestions on yet.
-export async function topRated(genreId: number, page: number): Promise<Page> {
+export async function topRated(genreId: number, page: number, exclude?: Excluded): Promise<Page> {
   return get<Page>("/discover/movie", {
     sort_by: "vote_average.desc",
     "vote_count.gte": 800,
     include_adult: "false",
     page,
     ...(genreId ? { with_genres: genreId } : {}),
+    ...withoutParams(exclude),
   });
 }
 
@@ -177,6 +192,7 @@ type RawDetails = TmdbListItem & {
     results?: { iso_3166_1: string; release_dates: { release_date: string; type: number }[] }[];
   };
   videos?: { results?: TmdbVideo[] };
+  keywords?: { keywords?: { id: number; name: string }[] };
 };
 
 const toProvider = (p: RawProvider): Provider => ({
@@ -188,7 +204,7 @@ const toProvider = (p: RawProvider): Provider => ({
 // One call for everything a film page needs.
 export async function details(id: number): Promise<TmdbDetails> {
   const d = await get<RawDetails>(`/movie/${id}`, {
-    append_to_response: "external_ids,watch/providers,release_dates,videos",
+    append_to_response: "external_ids,watch/providers,release_dates,videos,keywords",
     // Videos in any language: plenty of films only have an English trailer
     // filed under a different language, and pickTrailer prefers English anyway.
     include_video_language: "en,nl,null",
@@ -212,6 +228,7 @@ export async function details(id: number): Promise<TmdbDetails> {
     },
     nlRelease: cinema ?? null,
     trailerKey: pickTrailer(d.videos?.results ?? []),
+    keywordIds: (d.keywords?.keywords ?? []).map((k) => k.id),
   };
 }
 

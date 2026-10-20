@@ -6,7 +6,7 @@ import { suggest } from "@/lib/recommend";
 import { getMyServices } from "@/lib/settings";
 import { serviceList } from "@/lib/services";
 import { ensureDetails, ensureRatings, providersOf } from "@/lib/movies";
-import { parseFilters, passes } from "@/lib/score";
+import { excludedBy, parseExcluded, parseFilters, passes } from "@/lib/score";
 import { hasClaude } from "@/lib/claude";
 import { Header, Nav } from "@/components/Nav";
 import { MovieRow } from "@/components/MovieRow";
@@ -14,7 +14,7 @@ import { FilterBar } from "@/components/FilterBar";
 import { ControlBar } from "@/components/ControlBar";
 import { GenreChoices } from "@/components/GenreChoices";
 import { MOODS } from "@/lib/moods";
-import { genreName } from "@/lib/genres";
+import { customLabel, genreName, nothingPicked } from "@/lib/genres";
 import { ServicePicker } from "@/components/ServicePicker";
 import { SimilarPicker } from "@/components/SimilarPicker";
 import { parseLike } from "@/lib/similar";
@@ -51,7 +51,10 @@ export default async function Tonight({ searchParams }: { searchParams: SP }) {
   ]);
   const chosen = like.map((id) => liked.find((m) => m.id === id)).filter((m) => m !== undefined);
   const mood = MOODS.find((m) => m.key === sp.mood);
-  const genreLabel = mood?.label ?? (Number(sp.g) ? genreName(Number(sp.g)) : ANY_GENRE);
+  const custom = sp.gx !== undefined;
+  const genreLabel = custom
+    ? customLabel(parseExcluded(sp.gx))
+    : (mood?.label ?? (Number(sp.g) ? genreName(Number(sp.g)) : ANY_GENRE));
   // One line saying what's switched on, shown while the Filters panel is shut.
   const myServices = services.filter((p) => mine.includes(p.id)).map((p) => p.name);
   const summary = [
@@ -107,6 +110,10 @@ async function Picks({ sp }: { sp: SP }) {
   const filters = parseFilters(sp);
   if (!mine.length) filters.servicesOnly = false;
   const limit = Math.min(30, Math.max(STEP, Number(sp.n) || STEP));
+  const exclude = parseExcluded(sp.gx);
+  if (sp.gx !== undefined && nothingPicked(exclude)) {
+    return <p className="card p-4 text-sm text-gray-400">Pick at least one genre in ✏️ Custom.</p>;
+  }
 
   const like = parseLike(sp.like);
   // Your picks, and your watchlist with the same filters (films one of you
@@ -119,13 +126,14 @@ async function Picks({ sp }: { sp: SP }) {
     return db.movie.findMany({ where: { id: { in: ids } } });
   };
   const [picks, saved] = await Promise.all([
-    suggest({ users, genre: 0, extraGenres: genres, filters, limit, like }),
+    suggest({ users, genre: 0, extraGenres: genres, filters, limit, like, exclude }),
     watchlistFilms(),
   ]);
   const picked = new Set(picks.map((p) => p.movie.id));
   const fromWatchlist = saved
     .filter((m) => !picked.has(m.id))
     .filter((m) => !genres.length || m.genreIds.some((g) => genres.includes(g)))
+    .filter((m) => !excludedBy(m, exclude))
     .filter((m) => passes({ ...m, streamIds: (providersOf(m)?.stream ?? []).map((p) => p.id) }, filters, mine))
     .slice(0, 3);
 

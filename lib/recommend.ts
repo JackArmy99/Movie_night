@@ -5,7 +5,7 @@ import { ensureDetails, ensureRatings, ensureRecs, providersOf, saveList } from 
 import { getMyServices } from "./settings";
 import { hasTmdb, topRated } from "./tmdb";
 import { similarPool } from "./similar";
-import { Filters, MIN_VOTES, PASS, passes, passesCheap, reputationFactor, scoreCandidates, SEEN, Seed, Verdict } from "./score";
+import { Filters, MIN_VOTES, PASS, passes, passesCheap, reputationFactor, scoreCandidates, excludedBy, NO_EXCLUDED, type Excluded, SEEN, Seed, Verdict } from "./score";
 
 // Fresh TMDB lookups allowed per page load. Each one is two quick calls; the
 // rest arrive on the next visit (lists are cached for two months).
@@ -29,10 +29,12 @@ export async function suggest(opts: {
   limit?: number;
   extraGenres?: number[]; // Tonight mode: any of these
   like?: number[]; // "Similar to…": only films like these, taste breaks ties
+  exclude?: Excluded; // "Custom" genres: unticked genres / superhero never shown
 }): Promise<Suggestion[]> {
   const limit = opts.limit ?? 20;
   const genres = opts.extraGenres?.length ? opts.extraGenres : opts.genre ? [opts.genre] : [];
   const inGenre = (ids: number[]) => !genres.length || ids.some((g) => genres.includes(g));
+  const ex = opts.exclude ?? NO_EXCLUDED;
 
   const swipes = await db.swipe.findMany({
     where: { userId: { in: opts.users } },
@@ -105,7 +107,7 @@ export async function suggest(opts: {
   type Cand = { movie: Movie; score: number; taste: number; because: number[]; fallback: boolean };
   let pool: Cand[] = base
     .map((b) => ({ ...b, movie: byId.get(b.id)! }))
-    .filter((c) => c.movie && inGenre(c.movie.genreIds) && passesCheap(c.movie, opts.filters))
+    .filter((c) => c.movie && inGenre(c.movie.genreIds) && !excludedBy(c.movie, ex) && passesCheap(c.movie, opts.filters))
     // Obscure films with a handful of votes are mostly noise in TMDB's lists.
     .filter((c) => c.movie.voteCount >= MIN_VOTES)
     .map((c) => ({
@@ -136,12 +138,12 @@ export async function suggest(opts: {
   if (!like.length && pool.length < limit * 2 && hasTmdb()) {
     const seenIds = new Set(pool.map((c) => c.movie.id));
     for (const page of [1, 2, 3]) {
-      const res = await topRated(genres[0] ?? 0, page);
+      const res = await topRated(genres[0] ?? 0, page, ex);
       await saveList(res.results);
       const rows = await db.movie.findMany({ where: { id: { in: res.results.map((r) => r.id) } } });
       for (const m of rows.sort((a, b) => b.voteAverage - a.voteAverage)) {
         if (excluded.has(m.id) || seenIds.has(m.id)) continue;
-        if (!inGenre(m.genreIds) || !passesCheap(m, opts.filters)) continue;
+        if (!inGenre(m.genreIds) || excludedBy(m, ex) || !passesCheap(m, opts.filters)) continue;
         seenIds.add(m.id);
         pool.push({ movie: m, score: 0, taste: 0, because: [], fallback: true });
       }
@@ -169,7 +171,8 @@ export async function suggest(opts: {
         filters,
         services,
       );
-      if (ok && inGenre(m.genreIds)) picked.push({ ...c, movie: m });
+      // Checked again with fresh details: that's when a superhero film shows itself.
+      if (ok && inGenre(m.genreIds) && !excludedBy(m, ex)) picked.push({ ...c, movie: m });
       if (picked.length >= limit) break;
     }
   }

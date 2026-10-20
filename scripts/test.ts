@@ -17,12 +17,15 @@ import {
   trustedRating,
   verdictForStars,
   blendCloseness,
+  excludedBy,
+  parseExcluded,
 } from "../lib/score";
+import { customLabel } from "../lib/genres";
 import { directionFor, starsFromX } from "../lib/swipe";
 import { pickTrailer } from "../lib/tmdb";
 import { parseRatingLine } from "../lib/imdb";
 import { toIcs } from "../lib/ics";
-import { startFake, FILMS, recsFor, imdbOf } from "./fake-tmdb";
+import { startFake, FILMS, recsFor, imdbOf, keywordsOf } from "./fake-tmdb";
 
 let failures = 0;
 async function test(name: string, fn: () => void | Promise<void>) {
@@ -229,6 +232,19 @@ async function main() {
     assert.equal(order[0], 12, "the film both anchors list should lead");
     assert.ok(c.get(10)! > c.get(11)!, "higher on a list = closer");
     assert.ok(blendCloseness([[1]], 0.5).get(1)! < blendCloseness([[1]]).get(1)!, "second hop counts half");
+  });
+
+  await test("Custom genres: any unticked genre hides a film; superhero by keyword", () => {
+    const ex = parseExcluded("27,sh");
+    assert.deepEqual(ex, { genres: [27], superhero: true });
+    assert.ok(excludedBy({ genreIds: [35, 27], keywordIds: [] }, ex), "horror-comedy should be hidden");
+    assert.ok(!excludedBy({ genreIds: [35], keywordIds: [] }, ex));
+    assert.ok(excludedBy({ genreIds: [28], keywordIds: [9715] }, ex), "superhero film should be hidden");
+    assert.ok(!excludedBy({ genreIds: [28], keywordIds: [9715] }, parseExcluded("27")), "superhero ticked = shown");
+    assert.equal(customLabel(parseExcluded("27,sh")), "✏️ No Horror, Superhero");
+    assert.equal(customLabel(parseExcluded("")), "✏️ All genres");
+    const allBut = [28, 12, 16, 80, 99, 18, 10751, 14, 36, 27, 10402, 9648, 878, 53, 10752, 37].join(",") + ",sh";
+    assert.equal(customLabel(parseExcluded(allBut)), "✏️ Comedy, Romance");
   });
 
   await test("Calendar feed: valid iCalendar, all-day, escaped, folded", () => {
@@ -447,6 +463,34 @@ async function main() {
     assert.ok(like.cards.slice(0, direct).every((c) => pool.direct.has(c.id)), "direct matches should come first");
     const dv = votes.slice(0, direct);
     assert.deepEqual(dv, [...dv].sort((x, y) => y - x), "most-watched first among direct matches");
+  });
+
+  await test("Custom genres in Tonight and the swipe deck: nothing unticked gets through", async () => {
+    const { deckCards } = await import("../lib/deck");
+    const exclude = parseExcluded("18,sh"); // no Drama, no Superhero
+    const list = await suggest({ users: [a.id, b.id], genre: 0, filters: {}, limit: 15, exclude });
+    assert.ok(list.length > 0, "nothing suggested");
+    for (const s of list) {
+      assert.ok(!s.movie.genreIds.includes(18), `${s.movie.title} is a drama`);
+      assert.ok(!keywordsOf(s.movie.id).includes(9715), `${s.movie.title} is a superhero film`);
+      assert.ok(s.movie.keywordsAt, "keywords should be known by the time a film is shown");
+    }
+    const deck = await deckCards(a.id, 0, [], { exclude });
+    assert.ok(deck.cards.length > 0);
+    for (const c of deck.cards) {
+      const f = FILMS.find((x) => x.id === c.id)!;
+      assert.ok(!f.genre_ids.includes(18) && !keywordsOf(f.id).includes(9715), `deck card ${c.title} should be excluded`);
+    }
+    const like = await deckCards(a.id, 0, [], { exclude, like: [1007] });
+    for (const c of like.cards) {
+      const f = FILMS.find((x) => x.id === c.id)!;
+      assert.ok(!f.genre_ids.includes(18) && !keywordsOf(f.id).includes(9715), `similar-to card ${c.title} should be excluded`);
+    }
+    // Answer that first batch, so the deck moves on and saves its place.
+    for (const c of deck.cards) await db.swipe.create({ data: { userId: a.id, movieId: c.id, verdict: "unseen" } });
+    await deckCards(a.id, 0, [], { exclude });
+    const keys = (await db.setting.findMany({ where: { key: { startsWith: `deck:${a.id}:0` } } })).map((k) => k.key);
+    assert.ok(keys.some((k) => k.includes("x18,sh")), "Custom deck should keep its own bookmark");
   });
 
   await test("Counters stay exact under parallel use; OMDb stops at the daily limit", async () => {

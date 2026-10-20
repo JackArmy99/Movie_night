@@ -68,6 +68,9 @@ export function recsFor(id: number): FakeFilm[] {
     .slice(0, 20);
 }
 
+// Every 10th film is a "superhero" film (TMDB keyword 9715).
+export const keywordsOf = (id: number) => (id % 10 === 0 ? [9715, 9717] : [1234]);
+
 // The IMDb rating the fake daily file gives a film (OMDb's differs on purpose).
 export const imdbOf = (id: number) => (6 + (id % 30) / 10).toFixed(1);
 
@@ -116,6 +119,10 @@ export function startFake(port = 0): Promise<{ url: string; close: () => void; c
       if (from) list = list.filter((f) => f.release_date >= from);
       const minVote = Number(url.searchParams.get("vote_average.gte") ?? 0);
       if (minVote) list = list.filter((f) => f.vote_average >= minVote);
+      const noGenres = (url.searchParams.get("without_genres") ?? "").split("|").filter(Boolean).map(Number);
+      if (noGenres.length) list = list.filter((f) => !f.genre_ids.some((g) => noGenres.includes(g)));
+      const noKeywords = (url.searchParams.get("without_keywords") ?? "").split("|").filter(Boolean).map(Number);
+      if (noKeywords.length) list = list.filter((f) => !keywordsOf(f.id).some((k) => noKeywords.includes(k)));
       const sort = url.searchParams.get("sort_by");
       if (sort === "vote_average.desc") list = [...list].sort((a, b) => b.vote_average - a.vote_average);
       else list = [...list].sort((a, b) => b.vote_count - a.vote_count);
@@ -148,6 +155,7 @@ export function startFake(port = 0): Promise<{ url: string; close: () => void; c
             },
           },
         },
+        keywords: { keywords: keywordsOf(id).map((k) => ({ id: k, name: String(k) })) },
         videos: {
           results: [
             { key: `teaser${id}`, site: "YouTube", type: "Teaser", official: true, iso_639_1: "en" },

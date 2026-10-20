@@ -3,7 +3,7 @@
 // Tomatoes / earliest year and "Similar to…" films.
 import { db } from "./db";
 import { ensureDetails, ensureRatings, saveList } from "./movies";
-import { MIN_VOTES, passes, passesCheap } from "./score";
+import { MIN_VOTES, passes, passesCheap, excludedBy, hasExcluded, NO_EXCLUDED, type Excluded } from "./score";
 import { similarPool } from "./similar";
 import { getJson, setJson } from "./settings";
 import * as tmdb from "./tmdb";
@@ -17,7 +17,7 @@ export type Card = {
   score: number;
 };
 
-export type DeckFilters = { imdb?: number; rt?: number; from?: number; like?: number[] };
+export type DeckFilters = { imdb?: number; rt?: number; from?: number; like?: number[]; exclude?: Excluded };
 
 const toCard = (m: { id: number; title: string; year: number | null; posterPath: string | null; overview: string; voteAverage: number }): Card => ({
   id: m.id,
@@ -29,16 +29,19 @@ const toCard = (m: { id: number; title: string; year: number | null; posterPath:
 });
 
 // Of these films, the ones that pass the deck's IMDb / Rotten Tomatoes / year
-// filters. Ratings are looked up only when a rating filter is on (and cached).
+// filters and "Custom" genres. Ratings are looked up only when a rating
+// filter is on (and cached).
 async function passingDeckFilters(ids: number[], f: DeckFilters): Promise<Set<number>> {
   if (!ids.length) return new Set();
-  if (f.imdb || f.rt) {
+  const ex = f.exclude ?? NO_EXCLUDED;
+  // Superhero films only show themselves through keywords, which come with details.
+  if (f.imdb || f.rt || ex.superhero) {
     await ensureDetails(ids);
-    await ensureRatings(ids);
+    if (f.imdb || f.rt) await ensureRatings(ids);
   }
   const rows = await db.movie.findMany({ where: { id: { in: ids } } });
   const filters = { minImdb: f.imdb, minRt: f.rt, yearFrom: f.from };
-  return new Set(rows.filter((m) => passes({ ...m, streamIds: [] }, filters, [])).map((m) => m.id));
+  return new Set(rows.filter((m) => !excludedBy(m, ex) && passes({ ...m, streamIds: [] }, filters, [])).map((m) => m.id));
 }
 
 // The next films to swipe, most-watched first (the ones you've most likely
@@ -82,7 +85,8 @@ export async function deckCards(
   // Everything else: TMDB's most-watched list, with the year and a rough
   // score floor applied by TMDB itself, then the exact IMDb/RT check. Each
   // filter combination keeps its own bookmark.
-  const sig = [f.imdb, f.rt, f.from].map((v) => v ?? "").join("|");
+  const exSig = f.exclude && hasExcluded(f.exclude) ? [...f.exclude.genres, ...(f.exclude.superhero ? ["sh"] : [])].join(",") : "";
+  const sig = [f.imdb, f.rt, f.from].map((v) => v ?? "").join("|") + (exSig ? `|x${exSig}` : "");
   const cursorKey = sig === "||" ? `deck:${user.id}:${genre}` : `deck:${user.id}:${genre}:${sig}`;
   const start = await getJson<number>(cursorKey, 1);
   let bookmark = start;
@@ -94,6 +98,7 @@ export async function deckCards(
     const res = await tmdb.mostWatched(genre, page, {
       fromYear: f.from,
       minVote: f.imdb ? Math.max(0, f.imdb - 1) : undefined,
+      exclude: f.exclude,
     });
     await saveList(res.results);
     const ids = res.results.map((r) => r.id);
@@ -103,7 +108,9 @@ export async function deckCards(
       ),
     );
     const unanswered = ids.filter((id) => !answered.has(id));
-    const ok = await passingDeckFilters(unanswered, f);
+    // TMDB has already left out superhero films here (without_keywords), so no
+    // per-card lookup is needed for that.
+    const ok = await passingDeckFilters(unanswered, { ...f, exclude: f.exclude && { ...f.exclude, superhero: false } });
     const open = unanswered.filter((id) => ok.has(id));
     // Only move the bookmark past pages with nothing left to answer, so
     // closing the app halfway down a page never skips anything.
