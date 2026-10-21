@@ -23,6 +23,10 @@ Claude (`lib/claude.ts`, Haiku 5.5 default, monthly cap).
   down-left = `pass` ("not for me"), down-right/straight down = unseen.
   Unseen films form the "To decide" pile (`lib/pile.ts`, Watchlist tab) with
   trailers (`Movie.trailerKey`, TMDB `videos`, `pickTrailer()`).
+- Tonight cards are `SwipeRow`s: ← "Not for me" (pass), → watchlist, with an
+  Undo bar for 5 s (`tonightSwipe`/`undoTonightSwipe` restore the exact prior
+  state). Those actions must NOT `revalidatePath`: the refresh would remove the
+  card before its Undo bar shows.
 - Tabs: Swipe (opens `/swipe/0` straight on the cards) · Search (rate any film)
   · Tonight (all suggestions) · Watchlist · Cinema. `/suggest` and `/swipe`
   only redirect. Tonight and the deck share `ControlBar`: a genre button
@@ -59,8 +63,31 @@ Claude (`lib/claude.ts`, Haiku 5.5 default, monthly cap).
   2+ anchors), adds a half-weight second hop when the pool is small, and marks
   `direct` matches. Tonight: closeness × (1 + ½ taste), then IMDb/RT. Deck: direct
   matches first, most-watched first within; films under `MIN_VOTES` are skipped.
+- **Taste profile** (`lib/profile.ts`, pure maths tested): every answer
+  (stars, "Not for me" −1.2, seen) scores a film's features — genres, kinds
+  (`kind:anime` = Animation + Japanese, `kind:superhero`), language, keywords,
+  vibes, people (`p:<id>`). Score = sum/(n+3), so one answer barely moves a
+  feature and a pattern moves it a lot. `factorOf(affinity)` multiplies every
+  ranking score, 0.03–2.5×: very rare, never removed (Jack: "never never").
+  A negative *kind* counts on its own (`KIND_WEIGHT`), or liking action excuses
+  the Avengers. Real data 21 Oct: Jemke rates many superhero films well, so for
+  her they are NOT sunk — correct, not a bug. Answered films need details
+  (keywords/people): `loadTaste` backfills 60 a load, newest answers first,
+  and the daily job 300.
+- **People you love**: directors/writers of 2+ of your 4½–5★ films (counted
+  once per film) bring their other films (`personFilms`, crew only, cached 30
+  days as `person:<id>`) with "From X, who made N of your favourites".
+- **Vibes** (`lib/vibes.ts`): Claude tags films from a fixed list, 50 a call,
+  unknown tags dropped; the daily job tags up to 400 (answered first, then
+  shown). Used as profile features, in Similar to (0.6 Claude + 0.2 closeness
+  + 0.2 vibe overlap; no Claude: 0.6 vibe + 0.4 closeness) and moods
+  (`MOODS[].vibes`). No key → no vibes, nothing else changes.
 - Swipe deck logic lives in `lib/deck.ts` (`deckCards`, testable without a
-  session); `nextCards` is a thin action. Year goes to TMDB discover; IMDb/RT are
+  session); `nextCards` is a thin action. Two streams, ~3:1: "for you"
+  (`suggest()` for that person with `skip` = everything answered or queued)
+  and "have you seen?" (most-watched, details looked up, reordered by fit;
+  films under fit 0.15 are "sunk"). Every 25th card served
+  (`deckserved:<user>`) is an explore card from the sunk end. Year goes to TMDB discover; IMDb/RT are
   checked per card via OMDb (cached), so each filter combination has its own
   bookmark (`deck:<user>:<genre>:<sig>`). No buttons on the deck screen by
   request; only the swipe, the labels and Undo.
@@ -76,8 +103,9 @@ Claude (`lib/claude.ts`, Haiku 5.5 default, monthly cap).
   pad with top-rated when thin, then look up details/ratings/providers only for
   films about to be shown, until enough pass the sliders.
 - Everything external is cached on `Movie` (providers 7d, ratings 30d, recs 60d).
-- Swipe deck order = TMDB `vote_count.desc` (most-watched = most likely seen);
-  per-user, per-genre bookmark in `Setting deck:<user>:<genre>`.
+- "Have you seen?" order = TMDB `vote_count.desc` (most-watched = most likely
+  seen); per-user, per-genre bookmark in `Setting deck:<user>:<genre>`, moved
+  only past pages with nothing live left.
 - Auth: one shared passcode → HMAC cookie (`middleware.ts`); profile cookie
   picks which of the two people is on this phone. Calendar feed is public but
   keyed (`calendarKey()`).

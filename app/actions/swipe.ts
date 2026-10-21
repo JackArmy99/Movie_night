@@ -101,3 +101,31 @@ export async function pickWinner(winner: number, loser: number) {
   ]);
   revalidatePath("/rank");
 }
+
+// ---------- Tonight's cards: swipe left = not for me, right = watchlist ----------
+
+// No revalidatePath here: refreshing Tonight would remove the card before
+// its Undo bar could show (the watchlist page is always rendered fresh).
+export type TonightUndo = { verdict: string | null; stars: number | null; elo: number | null; listed: boolean };
+
+export async function tonightSwipe(movieId: number, dir: "bin" | "watch"): Promise<TonightUndo> {
+  const user = await me();
+  const key = { userId_movieId: { userId: user.id, movieId } };
+  const [prev, listed] = await Promise.all([db.swipe.findUnique({ where: key }), db.watchlistItem.findUnique({ where: key })]);
+  const undo: TonightUndo = { verdict: prev?.verdict ?? null, stars: prev?.stars ?? null, elo: prev?.elo ?? null, listed: Boolean(listed) };
+  if (dir === "bin") await swipe(movieId, "pass");
+  else if (!listed) await db.watchlistItem.create({ data: { userId: user.id, movieId } });
+  return undo;
+}
+
+// Put things back exactly as they were before the swipe.
+export async function undoTonightSwipe(movieId: number, undo: TonightUndo) {
+  const user = await me();
+  const key = { userId_movieId: { userId: user.id, movieId } };
+  if (undo.verdict) {
+    const data = { verdict: undo.verdict, stars: undo.stars, ...(undo.elo != null ? { elo: undo.elo } : {}) };
+    await db.swipe.upsert({ where: key, create: { userId: user.id, movieId, source: "swipe", ...data }, update: data });
+  } else await db.swipe.deleteMany({ where: { userId: user.id, movieId } });
+  if (undo.listed) await db.watchlistItem.upsert({ where: key, create: { userId: user.id, movieId }, update: {} });
+  else await db.watchlistItem.deleteMany({ where: { userId: user.id, movieId } });
+}

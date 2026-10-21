@@ -233,6 +233,12 @@ export function SwipeDeck({ genre, filters = {} }: { genre: number; filters?: De
                 <div className="text-lg font-bold leading-tight">
                   {card.title} <span className="font-normal text-gray-300">{card.year ?? ""}</span>
                 </div>
+                {card.kind && (
+                  <div className="mt-0.5 text-[11px] font-semibold text-amber-300">
+                    {card.kind === "foryou" ? "✨ For you" : card.kind === "explore" ? "🎲 Something different" : "👀 Have you seen it?"}
+                    {card.why && card.kind === "foryou" && <span className="font-normal text-gray-300"> · {card.why}</span>}
+                  </div>
+                )}
                 <p className="mt-1 line-clamp-2 text-xs text-gray-300">{card.overview}</p>
               </div>
               {aiming && (

@@ -57,6 +57,17 @@ model Movie {
   // Dutch cinema release date (YYYY-MM-DD) when known.
   nlRelease String?
 
+  // Original language (ISO 639-1, e.g. "ja"), from TMDB.
+  originalLanguage String?
+
+  // Director(s), writers and top cast: { d: [{id,name}], w: [...], c: [...] }.
+  people   Json?
+  peopleAt DateTime?
+
+  // "Vibes" Claude tagged the film with (slow-burn, twisty, cosy…), lib/vibes.ts.
+  vibes   String[] @default([])
+  vibesAt DateTime?
+
   // TMDB keyword ids (used to spot superhero films, which TMDB has no genre for).
   keywordIds Int[]     @default([])
   keywordsAt DateTime?

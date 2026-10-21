@@ -1,12 +1,37 @@
 // Turns your swipes into a list of films to watch, applying the sliders.
 import type { Movie } from "@prisma/client";
 import { db } from "./db";
-import { ensureDetails, ensureRatings, ensureRecs, providersOf, saveList } from "./movies";
+import {
+  ensureDetails,
+  ensureRatings,
+  ensureRecs,
+  providersOf,
+  saveList,
+} from "./movies";
 import { getMyServices } from "./settings";
-import { hasTmdb, topRated } from "./tmdb";
+import { hasTmdb, personFilms, topRated } from "./tmdb";
 import { similarPool } from "./similar";
 import { aiCandidates } from "./ai";
-import { Filters, MIN_VOTES, PASS, positionFactor, passes, passesCheap, reputationFactor, scoreCandidates, excludedBy, NO_EXCLUDED, type Excluded, SEEN, Seed, Verdict } from "./score";
+import { combinedFactor, loadTaste, type Taste } from "./profile";
+import { tagVibes, vibeOverlap } from "./vibes";
+import { MOODS } from "./moods";
+import { getJson, setJson } from "./settings";
+import {
+  Filters,
+  MIN_VOTES,
+  PASS,
+  positionFactor,
+  passes,
+  passesCheap,
+  reputationFactor,
+  scoreCandidates,
+  excludedBy,
+  NO_EXCLUDED,
+  type Excluded,
+  SEEN,
+  Seed,
+  Verdict,
+} from "./score";
 
 // Fresh TMDB lookups allowed per page load. Each one is two quick calls; the
 // rest arrive on the next visit (lists are cached for two months).
@@ -37,36 +62,66 @@ export async function suggest(opts: {
   mood?: string; // Tonight's mood key, passed on to Claude as a hint
   fresh?: boolean; // ask Claude for new picks instead of today's cached ones
   ai?: boolean; // false = taste engine only (default: use Claude when available)
+  skip?: number[]; // films not to return (the deck: answered or already queued)
 }): Promise<Suggestion[]> {
   const limit = opts.limit ?? 20;
-  const genres = opts.extraGenres?.length ? opts.extraGenres : opts.genre ? [opts.genre] : [];
-  const inGenre = (ids: number[]) => !genres.length || ids.some((g) => genres.includes(g));
+  const genres = opts.extraGenres?.length
+    ? opts.extraGenres
+    : opts.genre
+      ? [opts.genre]
+      : [];
+  // A mood also matches on vibes: a twisty drama counts as Mind-bending.
+  const moodVibes = MOODS.find((m) => m.key === opts.mood)?.vibes ?? [];
+  const inGenre = (ids: number[], vibes: string[] = []) =>
+    !genres.length ||
+    ids.some((g) => genres.includes(g)) ||
+    vibes.some((v) => moodVibes.includes(v));
   const ex = opts.exclude ?? NO_EXCLUDED;
+  // What each of you loves and avoids, learned from every answer: multiplies
+  // every film's score (strong avoid patterns sink a film to ~3%, never 0).
+  const tastes = await Promise.all(opts.users.map(loadTaste));
+  const fit = (m: Movie) => combinedFactor(tastes, m);
 
   const swipes = await db.swipe.findMany({
     where: { userId: { in: opts.users } },
-    include: { movie: { select: { genreIds: true, recsAt: true, title: true } } },
+    include: {
+      movie: { select: { genreIds: true, recsAt: true, title: true } },
+    },
   });
   // Seen by either of you, or "not interested" for either of you: never shown.
   const counts = (v: string) => SEEN.has(v) || v === PASS;
-  const excluded = new Set(swipes.filter((s) => counts(s.verdict)).map((s) => s.movieId));
-  const seeds: Seed[] = swipes.filter((s) => counts(s.verdict)).map((s) => ({
-    userId: s.userId,
-    movieId: s.movieId,
-    verdict: s.verdict as Verdict,
-    elo: s.elo,
-    stars: s.stars,
-  }));
+  const excluded = new Set(
+    swipes.filter((s) => counts(s.verdict)).map((s) => s.movieId),
+  );
+  const seeds: Seed[] = swipes
+    .filter((s) => counts(s.verdict))
+    .map((s) => ({
+      userId: s.userId,
+      movieId: s.movieId,
+      verdict: s.verdict as Verdict,
+      elo: s.elo,
+      stars: s.stars,
+    }));
+  for (const id of opts.skip ?? []) excluded.add(id);
 
   // Fetch missing "also liked" lists, best seeds first: super likes, then
   // likes, then dislikes, "not interested" last; preferring the genre being
   // browsed.
-  const order: Record<string, number> = { superlike: 0, like: 2, dislike: 4, [PASS]: 6 };
-  const rank = (s: (typeof swipes)[number]) => (order[s.verdict] ?? 6) + (inGenre(s.movie.genreIds) ? 0 : 1);
+  const order: Record<string, number> = {
+    superlike: 0,
+    like: 2,
+    dislike: 4,
+    [PASS]: 6,
+  };
+  const rank = (s: (typeof swipes)[number]) =>
+    (order[s.verdict] ?? 6) + (inGenre(s.movie.genreIds) ? 0 : 1);
   const missing = swipes
     .filter((s) => counts(s.verdict) && s.verdict !== "seen" && !s.movie.recsAt)
     .sort((a, b) => rank(a) - rank(b) || b.elo - a.elo);
-  const toFetch = [...new Set(missing.map((s) => s.movieId))].slice(0, RECS_PER_LOAD);
+  const toFetch = [...new Set(missing.map((s) => s.movieId))].slice(
+    0,
+    RECS_PER_LOAD,
+  );
   if (hasTmdb()) await ensureRecs(toFetch);
 
   const seedIds = [...new Set(seeds.map((s) => s.movieId))];
@@ -98,35 +153,85 @@ export async function suggest(opts: {
       ? null
       : await aiCandidates(
           like.length
-            ? { mode: "similar", anchors: like, users: opts.users, fresh: opts.fresh }
-            : { mode: "tonight", users: opts.users, mood: opts.mood, genres, exclude: opts.exclude, fresh: opts.fresh },
+            ? {
+                mode: "similar",
+                anchors: like,
+                users: opts.users,
+                fresh: opts.fresh,
+              }
+            : {
+                mode: "tonight",
+                users: opts.users,
+                mood: opts.mood,
+                genres,
+                exclude: opts.exclude,
+                fresh: opts.fresh,
+              },
         );
-  const aiPicks = (ai ?? []).filter((p) => !excluded.has(p.id) && !like.includes(p.id));
+  const aiPicks = (ai ?? []).filter(
+    (p) => !excluded.has(p.id) && !like.includes(p.id),
+  );
   const aiRank = new Map(aiPicks.map((p, i) => [p.id, positionFactor(i)]));
   const aiWhy = new Map(aiPicks.map((p) => [p.id, p.why]));
   const tasteOf = new Map(scored.map((s) => [s.movieId, s.score]));
   const maxTaste = Math.max(1e-9, ...scored.map((s) => s.score));
-  const tasteNorm = (id: number) => Math.min(1, Math.max(0, (tasteOf.get(id) ?? 0) / maxTaste));
+  const tasteNorm = (id: number) =>
+    Math.min(1, Math.max(0, (tasteOf.get(id) ?? 0) / maxTaste));
 
   type Base = { id: number; taste: number; because: number[]; ai: boolean };
   let base: Base[];
   if (like.length) {
     let closeness = await similarPool(like, { minSize: limit * 4, excluded });
-    const anchors = await db.movie.findMany({ where: { id: { in: like } }, select: { id: true, title: true, genreIds: true } });
+    const anchors = await db.movie.findMany({
+      where: { id: { in: like } },
+      select: { id: true, title: true, genreIds: true },
+    });
     for (const r of anchors) titles.set(r.id, r.title);
     if (!ai) {
       // Without Claude, a TMDB "also watched" film must at least share a genre
       // with one of the chosen films (no Bourne Ultimatum for Arrival).
       const anchorGenres = new Set(anchors.flatMap((a) => a.genreIds));
-      const rows = await db.movie.findMany({ where: { id: { in: [...closeness.keys()] } }, select: { id: true, genreIds: true } });
-      const ok = new Set(rows.filter((r) => r.genreIds.some((g) => anchorGenres.has(g))).map((r) => r.id));
-      closeness = Object.assign(new Map([...closeness].filter(([id]) => ok.has(id))), { direct: closeness.direct });
+      const rows = await db.movie.findMany({
+        where: { id: { in: [...closeness.keys()] } },
+        select: { id: true, genreIds: true },
+      });
+      const ok = new Set(
+        rows
+          .filter((r) => r.genreIds.some((g) => anchorGenres.has(g)))
+          .map((r) => r.id),
+      );
+      closeness = Object.assign(
+        new Map([...closeness].filter(([id]) => ok.has(id))),
+        { direct: closeness.direct },
+      );
     }
     const maxClose = Math.max(1e-9, ...closeness.values());
     const ids = new Set([...aiRank.keys(), ...closeness.keys()]);
+    // Vibes shared with the chosen films (tagged now if new: ≤ 5 films, one
+    // small Claude call). Without any vibes this term is 0 for every film.
+    await tagVibes(like);
+    const anchorVibes = (
+      await db.movie.findMany({
+        where: { id: { in: like } },
+        select: { vibes: true },
+      })
+    ).map((a) => a.vibes);
+    const vibeRows = await db.movie.findMany({
+      where: { id: { in: [...ids] } },
+      select: { id: true, vibes: true },
+    });
+    const vibeOf = new Map(
+      vibeRows.map((r) => [r.id, vibeOverlap(r.vibes, anchorVibes)]),
+    );
+    const close = (id: number) => (closeness.get(id) ?? 0) / maxClose;
+    const vibe = (id: number) => vibeOf.get(id) ?? 0;
     base = [...ids].map((id) => ({
       id,
-      taste: (0.75 * (aiRank.get(id) ?? 0) + 0.25 * ((closeness.get(id) ?? 0) / maxClose)) * (1 + 0.5 * tasteNorm(id)),
+      taste:
+        (ai
+          ? 0.6 * (aiRank.get(id) ?? 0) + 0.2 * close(id) + 0.2 * vibe(id)
+          : 0.4 * close(id) + 0.6 * vibe(id)) *
+        (1 + 0.5 * tasteNorm(id)),
       because: like,
       ai: aiRank.has(id),
     }));
@@ -140,20 +245,70 @@ export async function suggest(opts: {
       ai: aiRank.has(id),
     }));
   } else {
-    base = scored.map((s) => ({ id: s.movieId, taste: s.score, because: s.because, ai: false }));
+    base = scored.map((s) => ({
+      id: s.movieId,
+      taste: s.score,
+      because: s.because,
+      ai: false,
+    }));
   }
 
-  const candidateRows = await db.movie.findMany({ where: { id: { in: base.map((b) => b.id) } } });
+  // People you love: other films by directors/writers behind 2+ of your
+  // 4½–5★ films join the pool, with a lift that grows with how many.
+  const peopleWhy = new Map<number, string>();
+  if (!like.length) {
+    const scale = aiPicks.length ? 1 : maxTaste;
+    const inBase = new Map(base.map((b) => [b.id, b]));
+    for (const [id, p] of await peoplePool(tastes, excluded)) {
+      const lift = 0.35 * Math.min(1, p.count / 3) * scale;
+      const b = inBase.get(id);
+      if (b) b.taste += lift;
+      else {
+        const nb = {
+          id,
+          taste:
+            lift +
+            (aiPicks.length ? 0.4 * tasteNorm(id) : (tasteOf.get(id) ?? 0)),
+          because: [],
+          ai: false,
+        };
+        base.push(nb);
+        inBase.set(id, nb);
+      }
+      peopleWhy.set(
+        id,
+        `From ${p.name}, who made ${p.count} of your favourites`,
+      );
+    }
+  }
+
+  const candidateRows = await db.movie.findMany({
+    where: { id: { in: base.map((b) => b.id) } },
+  });
   const byId = new Map(candidateRows.map((m) => [m.id, m]));
 
-  type Cand = { movie: Movie; score: number; taste: number; because: number[]; fallback: boolean; ai?: boolean };
+  type Cand = {
+    movie: Movie;
+    score: number;
+    taste: number;
+    because: number[];
+    fallback: boolean;
+    ai?: boolean;
+  };
   let pool: Cand[] = base
     .map((b) => ({ ...b, movie: byId.get(b.id)! }))
-    .filter((c) => c.movie && inGenre(c.movie.genreIds) && !excludedBy(c.movie, ex) && passesCheap(c.movie, opts.filters))
+    .filter(
+      (c) =>
+        c.movie &&
+        inGenre(c.movie.genreIds, c.movie.vibes) &&
+        !excludedBy(c.movie, ex) &&
+        passesCheap(c.movie, opts.filters),
+    )
     // Obscure films with a handful of votes are mostly noise in TMDB's lists.
     // Claude's picks are deliberate, so they only need enough votes to be sure
     // the title was matched to the right film.
     .filter((c) => c.movie.voteCount >= (c.ai ? AI_MIN_VOTES : MIN_VOTES))
+    .map((c) => ({ ...c, taste: c.taste * fit(c.movie) }))
     .map((c) => ({
       movie: c.movie,
       taste: c.taste,
@@ -170,11 +325,19 @@ export async function suggest(opts: {
   const front = pool.slice(0, RERANK).map((c) => c.movie.id);
   await ensureDetails(front);
   await ensureRatings(front);
-  const rated = new Map((await db.movie.findMany({ where: { id: { in: front } } })).map((m) => [m.id, m]));
+  const rated = new Map(
+    (await db.movie.findMany({ where: { id: { in: front } } })).map((m) => [
+      m.id,
+      m,
+    ]),
+  );
   pool = pool
     .map((c) => {
       const m = rated.get(c.movie.id);
-      return m ? { ...c, movie: m, score: c.taste * reputationFactor(m) } : c;
+      if (!m) return c;
+      // Details may have just revealed keywords/people: refresh the fit.
+      const taste = (c.taste / fit(c.movie)) * fit(m);
+      return { ...c, movie: m, taste, score: taste * reputationFactor(m) };
     })
     .sort((a, b) => b.score - a.score);
 
@@ -185,12 +348,27 @@ export async function suggest(opts: {
     for (const page of [1, 2, 3]) {
       const res = await topRated(genres[0] ?? 0, page, ex);
       await saveList(res.results);
-      const rows = await db.movie.findMany({ where: { id: { in: res.results.map((r) => r.id) } } });
-      for (const m of rows.sort((a, b) => b.voteAverage - a.voteAverage)) {
+      const rows = await db.movie.findMany({
+        where: { id: { in: res.results.map((r) => r.id) } },
+      });
+      for (const m of rows.sort(
+        (a, b) => b.voteAverage * fit(b) - a.voteAverage * fit(a),
+      )) {
         if (excluded.has(m.id) || seenIds.has(m.id)) continue;
-        if (!inGenre(m.genreIds) || excludedBy(m, ex) || !passesCheap(m, opts.filters)) continue;
+        if (
+          !inGenre(m.genreIds, m.vibes) ||
+          excludedBy(m, ex) ||
+          !passesCheap(m, opts.filters)
+        )
+          continue;
         seenIds.add(m.id);
-        pool.push({ movie: m, score: 0, taste: 0, because: [], fallback: true });
+        pool.push({
+          movie: m,
+          score: 0,
+          taste: 0,
+          because: [],
+          fallback: true,
+        });
       }
       if (pool.length >= limit * 2) break;
     }
@@ -200,14 +378,26 @@ export async function suggest(opts: {
   // about to be shown, until enough pass the sliders.
   const services = await getMyServices();
   // "On our services" with no services picked yet would hide every film.
-  const filters = { ...opts.filters, servicesOnly: opts.filters.servicesOnly && services.length > 0 };
+  const filters = {
+    ...opts.filters,
+    servicesOnly: opts.filters.servicesOnly && services.length > 0,
+  };
   const picked: Cand[] = [];
-  for (let i = 0; i < Math.min(pool.length, CHECK_LIMIT) && picked.length < limit; i += 12) {
+  for (
+    let i = 0;
+    i < Math.min(pool.length, CHECK_LIMIT) && picked.length < limit;
+    i += 12
+  ) {
     const chunk = pool.slice(i, i + 12);
     const ids = chunk.map((c) => c.movie.id);
     await ensureDetails(ids);
     await ensureRatings(ids);
-    const fresh = new Map((await db.movie.findMany({ where: { id: { in: ids } } })).map((m) => [m.id, m]));
+    const fresh = new Map(
+      (await db.movie.findMany({ where: { id: { in: ids } } })).map((m) => [
+        m.id,
+        m,
+      ]),
+    );
     for (const c of chunk) {
       const m = fresh.get(c.movie.id) ?? c.movie;
       const stream = providersOf(m)?.stream ?? [];
@@ -217,22 +407,64 @@ export async function suggest(opts: {
         services,
       );
       // Checked again with fresh details: that's when a superhero film shows itself.
-      if (ok && inGenre(m.genreIds) && !excludedBy(m, ex)) picked.push({ ...c, movie: m });
+      if (ok && inGenre(m.genreIds, m.vibes) && !excludedBy(m, ex))
+        picked.push({ ...c, movie: m });
       if (picked.length >= limit) break;
     }
   }
 
   const watch = new Set(
-    (await db.watchlistItem.findMany({ where: { movieId: { in: picked.map((p) => p.movie.id) } } })).map(
-      (w) => w.movieId,
-    ),
+    (
+      await db.watchlistItem.findMany({
+        where: { movieId: { in: picked.map((p) => p.movie.id) } },
+      })
+    ).map((w) => w.movieId),
   );
   return picked.map((c) => ({
     movie: c.movie,
     score: c.score,
     fallback: c.fallback,
     onWatchlist: watch.has(c.movie.id),
-    because: c.because.slice(0, 2).map((id) => ({ id, title: titles.get(id) ?? "" })),
-    reason: aiWhy.get(c.movie.id),
+    because: c.because
+      .slice(0, 2)
+      .map((id) => ({ id, title: titles.get(id) ?? "" })),
+    reason: aiWhy.get(c.movie.id) ?? peopleWhy.get(c.movie.id),
   }));
+}
+
+const PERSON_TTL = 30 * 24 * 3600 * 1000;
+
+// Films by the people behind your favourites (TMDB, cached 30 days a person),
+// best-known first, minus anything excluded. Map: film → the person.
+async function peoplePool(
+  tastes: Taste[],
+  excluded: Set<number>,
+): Promise<Map<number, { name: string; count: number }>> {
+  const people = new Map<number, { name: string; count: number }>();
+  for (const t of tastes)
+    for (const p of t.lovedPeople)
+      if ((people.get(p.id)?.count ?? 0) < p.count) people.set(p.id, p);
+  const out = new Map<number, { name: string; count: number }>();
+  for (const [pid, p] of people) {
+    let cached = await getJson<{ at: number; ids: number[] } | null>(
+      `person:${pid}`,
+      null,
+    );
+    if ((!cached || Date.now() - cached.at > PERSON_TTL) && hasTmdb()) {
+      try {
+        const films = (await personFilms(pid))
+          .filter((f) => (f.vote_count ?? 0) >= MIN_VOTES)
+          .sort((a, b) => (b.vote_count ?? 0) - (a.vote_count ?? 0))
+          .slice(0, 30);
+        await saveList(films);
+        cached = { at: Date.now(), ids: films.map((f) => f.id) };
+        await setJson(`person:${pid}`, cached);
+      } catch {
+        // TMDB hiccup: just go without this person today.
+      }
+    }
+    for (const id of cached?.ids ?? [])
+      if (!excluded.has(id) && !out.has(id)) out.set(id, p);
+  }
+  return out;
 }

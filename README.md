@@ -2,14 +2,19 @@
 
 Films the two of you will **both** like — and never one you've already seen.
 
-- **Swipe** through the most-watched films per genre towards the stars you'd
-  give: left 1★, up 3★, right 5★ (diagonals 2★ and 4★); down = haven't seen.
+- **Swipe** films towards the stars you'd give: left 1★, up 3★, right 5★
+  (diagonals 2★ and 4★); down-left = not for me, down-right = haven't seen.
+  About 3 in 4 cards are picked for you, 1 in 4 are well-known "have you seen
+  it?" films. It learns: keep saying "not for me" to a kind of film (anime,
+  superhero…) and it becomes very rare, never quite gone.
+- **People you love**: more from directors behind several of your favourites.
 - **To decide**: films you haven't seen, with their trailer → want to see / not interested.
 - **Search** any film (seen one at the cinema?) and give it stars.
 - **Import Letterboxd** (the export .zip, straight from your phone).
 - **Tonight**: suggestions by mood or genre with sliders (IMDb, Rotten Tomatoes,
   year, length), your streaming services (via JustWatch), for both of you or just
-  you. IMDb and Rotten Tomatoes scores steer the order.
+  you. IMDb and Rotten Tomatoes scores steer the order. Swipe a film ← for
+  "not for me", → for the watchlist.
 - **This or that**: rank your super likes in a couple of minutes.
 - **Shared watchlist**: films you both want float to the top.
 - **Dutch cinema calendar** with trailers, subscribable in your phone's calendar.
@@ -46,8 +51,8 @@ and survives redeploys; **Settings → Download a backup** gives you a copy.
 TMDB, JustWatch data, IMDb's daily ratings file, Vercel Hobby (incl. its daily
 cron) and Neon free tier: **€0**. OMDb free key:
 1,000 lookups a day (the app stops at 950 and caches each film for a month).
-Claude explanations: optional, about 1p per batch of 10, monthly cap via
-`CLAUDE_MONTHLY_CAP_USD` (default $3).
+Claude (picks, explanations, vibe tags): optional, a few pence a month, capped
+via `CLAUDE_MONTHLY_CAP_USD` (default $1).
 
 ## For developers
 

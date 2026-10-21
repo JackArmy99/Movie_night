@@ -26,6 +26,7 @@ export function fromList(m: tmdb.TmdbListItem): Prisma.MovieCreateInput {
     popularity: m.popularity ?? 0,
     voteAverage: m.vote_average ?? 0,
     voteCount: m.vote_count ?? 0,
+    originalLanguage: m.original_language ?? null,
   };
 }
 
@@ -46,11 +47,12 @@ export async function ensureDetails(ids: number[]): Promise<void> {
   if (!tmdb.hasTmdb() || !ids.length) return;
   const rows = await db.movie.findMany({
     where: { id: { in: ids } },
-    select: { id: true, detailsAt: true, providersAt: true, trailerAt: true, keywordsAt: true },
+    select: { id: true, detailsAt: true, providersAt: true, trailerAt: true, keywordsAt: true, peopleAt: true },
   });
-  // trailerAt / keywordsAt: films looked up before those existed get one more lookup.
+  // trailerAt / keywordsAt / peopleAt: films looked up before those existed get one more lookup.
   const stale = rows.filter(
-    (r) => older(r.detailsAt, RATINGS_TTL) || older(r.providersAt, PROVIDERS_TTL) || !r.trailerAt || !r.keywordsAt,
+    (r) =>
+      older(r.detailsAt, RATINGS_TTL) || older(r.providersAt, PROVIDERS_TTL) || !r.trailerAt || !r.keywordsAt || !r.peopleAt,
   );
   const found = await pmap(stale, 8, ({ id }) => tmdb.details(id));
   const now = new Date();
@@ -76,6 +78,9 @@ export async function ensureDetails(ids: number[]): Promise<void> {
             trailerAt: now,
             keywordIds: d.keywordIds,
             keywordsAt: now,
+            people: d.people as unknown as Prisma.InputJsonValue,
+            peopleAt: now,
+            originalLanguage: base.originalLanguage,
             detailsAt: now,
             providersAt: now,
           },

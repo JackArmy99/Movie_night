@@ -21,6 +21,7 @@ export type TmdbListItem = {
   popularity?: number;
   vote_average?: number;
   vote_count?: number;
+  original_language?: string;
 };
 
 export type Provider = { id: number; name: string; logo: string | null };
@@ -39,7 +40,12 @@ export type TmdbDetails = TmdbListItem & {
   nlRelease: string | null;
   trailerKey: string | null;
   keywordIds: number[];
+  people: People;
 };
+
+export type Person = { id: number; name: string };
+// Directors, writers and the top 3 billed actors.
+export type People = { d: Person[]; w: Person[]; c: Person[] };
 
 export type TmdbVideo = {
   key: string;
@@ -193,6 +199,10 @@ type RawDetails = TmdbListItem & {
   };
   videos?: { results?: TmdbVideo[] };
   keywords?: { keywords?: { id: number; name: string }[] };
+  credits?: {
+    cast?: { id: number; name: string; order?: number }[];
+    crew?: { id: number; name: string; job?: string; department?: string }[];
+  };
 };
 
 const toProvider = (p: RawProvider): Provider => ({
@@ -204,7 +214,7 @@ const toProvider = (p: RawProvider): Provider => ({
 // One call for everything a film page needs.
 export async function details(id: number): Promise<TmdbDetails> {
   const d = await get<RawDetails>(`/movie/${id}`, {
-    append_to_response: "external_ids,watch/providers,release_dates,videos,keywords",
+    append_to_response: "external_ids,watch/providers,release_dates,videos,keywords,credits",
     // Videos in any language: plenty of films only have an English trailer
     // filed under a different language, and pickTrailer prefers English anyway.
     include_video_language: "en,nl,null",
@@ -229,7 +239,35 @@ export async function details(id: number): Promise<TmdbDetails> {
     nlRelease: cinema ?? null,
     trailerKey: pickTrailer(d.videos?.results ?? []),
     keywordIds: (d.keywords?.keywords ?? []).map((k) => k.id),
+    people: peopleOf(d.credits),
   };
+}
+
+const WRITER_JOBS = new Set(["Screenplay", "Writer", "Novel", "Story", "Author"]);
+
+function peopleOf(credits: RawDetails["credits"]): People {
+  const crew = credits?.crew ?? [];
+  const uniq = (list: Person[]) => [...new Map(list.map((p) => [p.id, p])).values()];
+  return {
+    d: uniq(crew.filter((c) => c.job === "Director").map(({ id, name }) => ({ id, name }))).slice(0, 2),
+    w: uniq(crew.filter((c) => WRITER_JOBS.has(c.job ?? "")).map(({ id, name }) => ({ id, name }))).slice(0, 3),
+    c: [...(credits?.cast ?? [])]
+      .sort((a, b) => (a.order ?? 99) - (b.order ?? 99))
+      .slice(0, 3)
+      .map(({ id, name }) => ({ id, name })),
+  };
+}
+
+// The films a person directed or wrote, for "more from people you love".
+export async function personFilms(personId: number): Promise<TmdbListItem[]> {
+  const res = await get<{ cast?: TmdbListItem[]; crew?: (TmdbListItem & { job?: string })[] }>(
+    `/person/${personId}/movie_credits`,
+  );
+  const crew = (res.crew ?? []).filter((c) => c.job === "Director" || WRITER_JOBS.has(c.job ?? ""));
+  const seen = new Set<number>();
+  // Films they made, not ones they appear in (a director's cameo or a
+  // documentary about them says nothing about their taste).
+  return crew.filter((m) => (seen.has(m.id) ? false : (seen.add(m.id), true)));
 }
 
 // Films opening in Dutch cinemas between two dates.

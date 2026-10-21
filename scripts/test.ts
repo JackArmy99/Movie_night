@@ -25,7 +25,9 @@ import { directionFor, starsFromX } from "../lib/swipe";
 import { pickTrailer } from "../lib/tmdb";
 import { parseRatingLine } from "../lib/imdb";
 import { toIcs } from "../lib/ics";
-import { startFake, FILMS, recsFor, imdbOf, keywordsOf, lastClaudeRequest } from "./fake-tmdb";
+import { affinity, avoidedKinds, buildProfile, factorOf, featuresOf, signalOf } from "../lib/profile";
+import { vibeOverlap } from "../lib/vibes";
+import { startFake, FILMS, recsFor, imdbOf, keywordsOf, lastClaudeRequest, directorOf, isAnime } from "./fake-tmdb";
 
 let failures = 0;
 async function test(name: string, fn: () => void | Promise<void>) {
@@ -258,6 +260,33 @@ async function main() {
     for (const line of ics.split("\r\n")) assert.ok(Buffer.byteLength(line) <= 75, `line too long: ${line.length}`);
   });
 
+  await test("Taste profile: a pattern of 'Not for me' sinks a kind, one rejection barely moves it", () => {
+    const film = (genreIds: number[], kw: number[] = [], lang = "en") => ({ genreIds, keywordIds: kw, originalLanguage: lang, people: null, vibes: [] as string[] });
+    const superhero = film([28, 878], [9715]);
+    const action = film([28, 53]);
+    const loved = Array.from({ length: 6 }, () => ({ verdict: "superlike", stars: 5, movie: film([28, 53]) }));
+    const passes8 = Array.from({ length: 8 }, () => ({ verdict: "pass", stars: null, movie: film([28, 878], [9715]) }));
+    const p = buildProfile([...loved, ...passes8]);
+    const fSuper = factorOf(affinity(p, superhero));
+    const fAction = factorOf(affinity(p, action));
+    assert.ok(fSuper < 0.15, `superhero factor ${fSuper.toFixed(3)} should be near the floor`);
+    assert.ok(fSuper >= 0.03, "never zero");
+    assert.ok(fAction > 1.5, `loved kind factor ${fAction.toFixed(2)}`);
+    const one = buildProfile([...loved, passes8[0]]);
+    assert.ok(factorOf(affinity(one, superhero)) > 0.6, "a single rejection should barely move it");
+    assert.ok(featuresOf(film([16], [], "ja")).top.includes("kind:anime"));
+    assert.ok(!featuresOf(film([16], [], "en")).top.includes("kind:anime"), "Pixar isn't anime");
+    assert.ok(avoidedKinds(p, (id) => String(id)).includes("superhero films"));
+    assert.ok(signalOf("superlike", 5) > signalOf("like", 4) && signalOf("pass", null) < 0 && signalOf("unseen", null) === 0);
+  });
+
+  await test("Vibes: overlap with the chosen films' vibes", () => {
+    assert.equal(vibeOverlap(["twisty", "tense"], [["twisty", "tense"]]), 1);
+    assert.equal(vibeOverlap(["cosy"], [["twisty", "tense"]]), 0);
+    assert.equal(vibeOverlap([], [["twisty"]]), 0);
+    assert.equal(vibeOverlap(["twisty"], [["twisty", "tense"], ["twisty"]]), 0.75);
+  });
+
   // ---------- end to end against a fake TMDB ----------
   const dbUrl = process.env.DATABASE_URL ?? "";
   if (!/test/i.test(new URL(dbUrl.replace(/^postgres(ql)?:/, "http:")).pathname)) {
@@ -486,10 +515,15 @@ async function main() {
       const f = FILMS.find((x) => x.id === c.id)!;
       assert.ok(!f.genre_ids.includes(18) && !keywordsOf(f.id).includes(9715), `similar-to card ${c.title} should be excluded`);
     }
-    // Answer that first batch, so the deck moves on and saves its place.
-    for (const c of deck.cards) await db.swipe.create({ data: { userId: a.id, movieId: c.id, verdict: "unseen" } });
-    await deckCards(a.id, 0, [], { exclude });
-    const keys = (await db.setting.findMany({ where: { key: { startsWith: `deck:${a.id}:0` } } })).map((k) => k.key);
+    // Answer a few batches, so the "have you seen?" stream finishes its first
+    // TMDB page and saves its place.
+    let batch = deck.cards;
+    let keys: string[] = [];
+    for (let round = 0; round < 15 && !keys.some((k) => k.includes("x18,sh")); round++) {
+      for (const c of batch) await db.swipe.upsert({ where: { userId_movieId: { userId: a.id, movieId: c.id } }, create: { userId: a.id, movieId: c.id, verdict: "unseen" }, update: {} });
+      batch = (await deckCards(a.id, 0, [], { exclude })).cards;
+      keys = (await db.setting.findMany({ where: { key: { startsWith: `deck:${a.id}:0` } } })).map((k) => k.key);
+    }
     assert.ok(keys.some((k) => k.includes("x18,sh")), "Custom deck should keep its own bookmark");
   });
 
@@ -578,6 +612,96 @@ async function main() {
     process.env.ANTHROPIC_API_KEY = "";
     assert.equal(await aiCandidates({ mode: "similar", anchors: [1012], users: [a.id] }), null);
     assert.equal(fake.calls.filter((c) => c === "/v1/messages").length, before, "Claude was called anyway");
+  });
+
+  // ---------- learning what you like and avoid ----------
+  const c = await db.user.create({ data: { name: "L" } });
+  const sh = (id: number) => keywordsOf(id).includes(9715);
+  {
+    // L loves a handful of films, and has said "Not for me" to 12 superhero
+    // films and 6 anime.
+    await saveList(FILMS);
+    // Every other one, so some of each kind are still unanswered near the
+    // top of the most-watched list (for the explore slot to find).
+    const superheroes = FILMS.filter((f) => sh(f.id)).filter((_, i) => i % 2).slice(0, 12).map((f) => f.id);
+    const anime = FILMS.filter((f) => isAnime(f.id) && !sh(f.id)).filter((_, i) => i % 2).slice(0, 6).map((f) => f.id);
+    const loved = [1003, 1021, 1039, 1057, 1075, 1093];
+    for (const id of superheroes) await db.swipe.create({ data: { userId: c.id, movieId: id, verdict: "pass" } });
+    for (const id of anime) await db.swipe.create({ data: { userId: c.id, movieId: id, verdict: "pass" } });
+    for (const id of loved) await db.swipe.create({ data: { userId: c.id, movieId: id, verdict: "superlike", stars: 5 } });
+  }
+
+  await test("Learning: after many 'Not for me' superhero/anime films, Tonight barely shows them", async () => {
+    const list = await suggest({ users: [c.id], genre: 0, filters: {}, limit: 15 });
+    assert.ok(list.length >= 10, `only ${list.length}`);
+    const bad = list.filter((s) => sh(s.movie.id) || isAnime(s.movie.id));
+    assert.ok(bad.length <= 1, `${bad.length} superhero/anime films in the top 15: ${bad.map((s) => s.movie.title)}`);
+    // Never "never": sunk far down, but not removed.
+    const { loadTaste, combinedFactor } = await import("../lib/profile");
+    const t = await loadTaste(c.id);
+    const m = (await db.movie.findUnique({ where: { id: 1100 } }))!;
+    const f = combinedFactor([t], m);
+    assert.ok(f > 0 && f < 0.2, `superhero film factor ${f}`);
+  });
+
+  await test("Deck: about 3 'for you' cards to 1 'have you seen?', nothing answered comes back, explore 1 in 25", async () => {
+    const { deckCards } = await import("../lib/deck");
+    const kinds: Record<string, number> = {};
+    const shown: number[] = [];
+    const sunkShown: number[] = [];
+    for (let round = 0; round < 5; round++) {
+      const { cards } = await deckCards(c.id, 0, shown);
+      assert.ok(cards.length > 0, `round ${round}: no cards`);
+      for (const card of cards) {
+        assert.ok(!shown.includes(card.id), `${card.title} came back`);
+        kinds[card.kind ?? "?"] = (kinds[card.kind ?? "?"] ?? 0) + 1;
+        shown.push(card.id);
+        if (card.kind !== "explore" && (sh(card.id) || isAnime(card.id))) sunkShown.push(card.id);
+      }
+      // Answer them: unseen, so they're out of the deck.
+      for (const card of cards) await db.swipe.create({ data: { userId: c.id, movieId: card.id, verdict: "unseen" } });
+    }
+    const total = shown.length;
+    assert.ok((kinds.foryou ?? 0) >= total * 0.6, `for you ${kinds.foryou} of ${total} (${JSON.stringify(kinds)})`);
+    assert.ok((kinds.seen ?? 0) >= total * 0.15, `have you seen ${kinds.seen} of ${total}`);
+    assert.ok((kinds.explore ?? 0) >= 1 && (kinds.explore ?? 0) <= 3, `explore ${kinds.explore} in ${total}`);
+    assert.ok(sunkShown.length <= 2, `${sunkShown.length} superhero/anime cards outside explore slots`);
+  });
+
+  await test("People you love: a director behind 3 of your 5★ films brings their other films", async () => {
+    const d = await db.user.create({ data: { name: "P" } });
+    const director = directorOf(1005);
+    const theirs = FILMS.filter((f) => directorOf(f.id) === director).map((f) => f.id);
+    for (const id of theirs.slice(0, 3)) await db.swipe.create({ data: { userId: d.id, movieId: id, verdict: "superlike", stars: 5 } });
+    const { loadTaste } = await import("../lib/profile");
+    const t = await loadTaste(d.id);
+    assert.equal(t.lovedPeople[0]?.id, director, JSON.stringify(t.lovedPeople));
+    assert.equal(t.lovedPeople[0]?.count, 3);
+    const list = await suggest({ users: [d.id], genre: 0, filters: {}, limit: 20 });
+    const fromThem = list.filter((s) => theirs.includes(s.movie.id));
+    assert.ok(fromThem.length >= 2, `only ${fromThem.length} films by the loved director`);
+    assert.ok(fromThem.some((s) => s.reason?.startsWith(`From Director ${director}, who made 3`)), fromThem.map((s) => s.reason).join(" | "));
+  });
+
+  await test("Vibe tags: Claude tags in batches, unknown tags dropped, never twice; no key → nothing", async () => {
+    const { tagVibes, tagPending } = await import("../lib/vibes");
+    assert.equal(await tagVibes([1301, 1302]), 0, "no key: should do nothing");
+    Object.assign(process.env, { ANTHROPIC_API_KEY: "test-key", ANTHROPIC_BASE_URL: fake.url, CLAUDE_MONTHLY_CAP_USD: "1" });
+    const calls = () => fake.calls.filter((x) => x === "/v1/messages").length;
+    const before = calls();
+    assert.equal(await tagVibes([1301, 1302]), 2);
+    const rows = await db.movie.findMany({ where: { id: { in: [1301, 1302] } }, orderBy: { id: "asc" } });
+    assert.deepEqual(rows[0].vibes, ["twisty", "tense"]);
+    assert.deepEqual(rows[1].vibes, ["feel-good"]);
+    await tagVibes([1301, 1302]);
+    assert.equal(calls() - before, 1, "already-tagged films were sent again");
+    const n = await tagPending(120);
+    assert.ok(n > 50, `nightly job tagged ${n}`);
+    assert.equal(calls() - before, 1 + Math.ceil(n / 50), "should send batches of 50");
+    // Moods match on vibes: a "twisty" film counts as Mind-bending whatever its genres.
+    const mind = await suggest({ users: [c.id], genre: 0, extraGenres: [878, 9648], mood: "mind", filters: {}, limit: 30, ai: false });
+    assert.ok(mind.some((s) => !s.movie.genreIds.some((g) => [878, 9648].includes(g)) && s.movie.vibes.includes("twisty")), "no film came in through its vibes");
+    process.env.ANTHROPIC_API_KEY = "";
   });
 
   fake.close();

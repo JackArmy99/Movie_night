@@ -12,7 +12,8 @@ import { askJson, underCap } from "./claude";
 import { saveList } from "./movies";
 import { pmap } from "./pmap";
 import { getJson, setJson } from "./settings";
-import { GENRES } from "./genres";
+import { GENRES, genreName } from "./genres";
+import { avoidedKinds, loadTaste } from "./profile";
 import { MOODS } from "./moods";
 import { SEEN, type Excluded } from "./score";
 import * as tmdb from "./tmdb";
@@ -70,9 +71,12 @@ async function tasteText(users: string[]): Promise<string> {
       .filter((s) => (s.stars ?? 5) <= 2)
       .slice(-15)
       .map((s) => label(s.movie));
+    // Patterns from every answer, "Not for me" included (lib/profile.ts).
+    const avoids = avoidedKinds((await loadTaste(p.id)).profile, genreName);
     parts.push(
       `${p.name} loved: ${loved.join("; ") || "—"}\n${p.name} liked: ${liked.join("; ") || "—"}\n` +
-        `${p.name} disliked: ${disliked.join("; ") || "—"}`,
+        `${p.name} disliked: ${disliked.join("; ") || "—"}` +
+        (avoids.length ? `\n${p.name} rarely enjoys: ${avoids.join(", ")}` : ""),
     );
   }
   return parts.join("\n\n");

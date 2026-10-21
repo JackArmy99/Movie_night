@@ -10,6 +10,7 @@ import { excludedBy, parseExcluded, parseFilters, passes } from "@/lib/score";
 import { hasClaude } from "@/lib/claude";
 import { Header, Nav } from "@/components/Nav";
 import { MovieRow } from "@/components/MovieRow";
+import { SwipeRow } from "@/components/SwipeRow";
 import { FilterBar } from "@/components/FilterBar";
 import { ControlBar } from "@/components/ControlBar";
 import { GenreChoices } from "@/components/GenreChoices";
@@ -161,18 +162,22 @@ async function Picks({ sp }: { sp: SP }) {
           />
         )}
         {picks.length ? (
-          picks.map((s) => (
-            <MovieRow
-              key={s.movie.id}
-              m={s.movie}
-              mine={mine}
-              because={s.because}
-              why={s.movie.why ?? s.reason}
-              onWatchlist={s.onWatchlist}
-              becausePrefix={like.length ? "Like" : "Because of"}
-              note={s.fallback ? "Highly rated — rate more films for personal picks" : undefined}
-            />
-          ))
+          <>
+            <p className="text-xs text-gray-500">Swipe a film ← for not for me, → for your watchlist.</p>
+            {picks.map((s) => (
+              <SwipeRow key={s.movie.id} movieId={s.movie.id} title={s.movie.title}>
+                <MovieRow
+                  m={s.movie}
+                  mine={mine}
+                  because={s.because}
+                  why={s.reason ?? s.movie.why}
+                  onWatchlist={s.onWatchlist}
+                  becausePrefix={like.length ? "Like" : "Because of"}
+                  note={s.fallback ? "Highly rated — rate more films for personal picks" : undefined}
+                />
+              </SwipeRow>
+            ))}
+          </>
         ) : (
           <p className="card p-4 text-sm text-gray-400">
             Nothing fits. Try another mood, loosen the filters or switch off &quot;On our services&quot;.

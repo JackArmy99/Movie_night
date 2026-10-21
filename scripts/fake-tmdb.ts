@@ -22,6 +22,7 @@ export type FakeFilm = {
   popularity: number;
   overview: string;
   poster_path: null;
+  original_language: string;
 };
 
 export const FILMS: FakeFilm[] = Array.from({ length: 600 }, (_, i) => {
@@ -38,6 +39,8 @@ export const FILMS: FakeFilm[] = Array.from({ length: 600 }, (_, i) => {
     popularity: 100 - i / 10,
     overview: `A made-up film number ${id}.`,
     poster_path: null,
+    // Animation films with an id divisible by 3 are Japanese: "anime".
+    original_language: g1 === 16 && id % 3 === 0 ? "ja" : id % 11 === 0 ? "fr" : "en",
   };
 });
 const byId = new Map(FILMS.map((f) => [f.id, f]));
@@ -71,6 +74,11 @@ export function recsFor(id: number): FakeFilm[] {
 // Every 10th film is a "superhero" film (TMDB keyword 9715).
 export const keywordsOf = (id: number) => (id % 10 === 0 ? [9715, 9717] : [1234]);
 
+// Each film's director is one of 40 made-up people (person id 9000 + id % 40),
+// so a director's films are every 40th film.
+export const directorOf = (id: number) => 9000 + (id % 40);
+export const isAnime = (id: number) => byId.get(id)?.original_language === "ja" && Boolean(byId.get(id)?.genre_ids.includes(16));
+
 // The IMDb rating the fake daily file gives a film (OMDb's differs on purpose).
 export const imdbOf = (id: number) => (6 + (id % 30) / 10).toFixed(1);
 
@@ -94,6 +102,25 @@ export function startFake(port = 0): Promise<{ url: string; close: () => void; c
       req.on("data", (c) => (body += c));
       req.on("end", () => {
         lastClaudeRequest.body = body;
+        const reply = (payload: unknown) =>
+          json({
+            id: "msg_fake",
+            type: "message",
+            role: "assistant",
+            model: "claude-haiku-5-5",
+            content: [{ type: "text", text: JSON.stringify(payload) }],
+            stop_reason: "end_turn",
+            stop_sequence: null,
+            usage: { input_tokens: 3000, output_tokens: 1000 },
+          });
+        // Vibe tagging: odd ids are "twisty" + "tense", even ids "feel-good",
+        // and every film also gets a tag that isn't on the list.
+        if (body.includes("how they feel to watch")) {
+          const ids = [...body.matchAll(/\[(\d+)\]/g)].map((m) => Number(m[1]));
+          return reply({
+            films: ids.map((id) => ({ id, vibes: id % 2 ? ["twisty", "tense", "not-a-vibe"] : ["feel-good", "made-up"] })),
+          });
+        }
         const films = [
           { title: "Film 1000", year: 1970, why: "already seen — must be filtered out" },
           { title: "Not A Real Film", year: 2001, why: "unknown to TMDB — must be dropped" },
@@ -162,6 +189,14 @@ export function startFake(port = 0): Promise<{ url: string; close: () => void; c
       return json(page(FILMS.filter((f) => f.title.toLowerCase() === q), 1));
     }
     if (path === "/watch/providers/movie") return json({ results: PROVIDERS });
+    const person = path.match(/^\/person\/(\d+)\/movie_credits$/);
+    if (person) {
+      const pid = Number(person[1]);
+      return json({
+        cast: [],
+        crew: FILMS.filter((f) => directorOf(f.id) === pid).map((f) => ({ ...f, job: "Director" })),
+      });
+    }
     const m = path.match(/^\/movie\/(\d+)(\/(recommendations|similar))?$/);
     if (m) {
       const id = Number(m[1]);
@@ -183,6 +218,10 @@ export function startFake(port = 0): Promise<{ url: string; close: () => void; c
               rent: [PROVIDERS[(id + 1) % PROVIDERS.length]],
             },
           },
+        },
+        credits: {
+          crew: [{ id: directorOf(id), name: `Director ${directorOf(id)}`, job: "Director" }],
+          cast: [{ id: 8000 + (id % 25), name: `Actor ${8000 + (id % 25)}`, order: 0 }],
         },
         keywords: { keywords: keywordsOf(id).map((k) => ({ id: k, name: String(k) })) },
         videos: {
